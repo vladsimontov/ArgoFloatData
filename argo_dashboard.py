@@ -23,6 +23,7 @@ import tempfile
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import xarray as xr
 import plotly.express as px
 import plotly.graph_objects as go
@@ -66,6 +67,24 @@ st.markdown("""
   .stDataFrame {font-size: 0.9rem;}
 </style>
 """, unsafe_allow_html=True)
+
+# Disable browser auto-correct / auto-capitalize / autocomplete / spellcheck on
+# text inputs so serial numbers (e.g. P41308-22EU002) and WMOs aren't mangled.
+components.html("""
+<script>
+const doc = window.parent.document;
+function noAutocorrect(){
+  doc.querySelectorAll('input[type="text"], input:not([type]), textarea').forEach(el=>{
+    el.setAttribute('autocorrect','off');
+    el.setAttribute('autocapitalize','off');
+    el.setAttribute('autocomplete','off');
+    el.setAttribute('spellcheck','false');
+  });
+}
+noAutocorrect();
+new MutationObserver(noAutocorrect).observe(doc.body, {childList:true, subtree:true});
+</script>
+""", height=0)
 
 
 # ---------------- data loading (cached) ----------------
