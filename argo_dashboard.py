@@ -68,11 +68,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Disable browser auto-correct / auto-capitalize / autocomplete / spellcheck on
-# text inputs so serial numbers (e.g. P41308-22EU002) and WMOs aren't mangled.
+# Small UX fixes injected into the parent page:
+#  1) disable browser auto-correct/-capitalize/-complete/spellcheck on text inputs
+#     so serial numbers (e.g. P41308-22EU002) and WMOs aren't mangled.
+#  2) let the browser handle Ctrl/Cmd shortcuts (copy/paste/cut/select-all) instead
+#     of Streamlit's single-key hotkeys (c = clear cache, r = rerun), which otherwise
+#     hijack Ctrl+C. Capture-phase on window fires before Streamlit's handler.
 components.html("""
 <script>
-const doc = window.parent.document;
+const win = window.parent, doc = win.document;
 function noAutocorrect(){
   doc.querySelectorAll('input[type="text"], input:not([type]), textarea').forEach(el=>{
     el.setAttribute('autocorrect','off');
@@ -83,6 +87,12 @@ function noAutocorrect(){
 }
 noAutocorrect();
 new MutationObserver(noAutocorrect).observe(doc.body, {childList:true, subtree:true});
+
+win.addEventListener('keydown', function(e){
+  // a modifier is held -> the user wants a BROWSER shortcut (copy/paste/etc),
+  // not Streamlit's bare-key hotkey; stop it reaching Streamlit's handler.
+  if (e.ctrlKey || e.metaKey) e.stopImmediatePropagation();
+}, true);
 </script>
 """, height=0)
 
