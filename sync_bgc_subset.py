@@ -268,6 +268,8 @@ def main():
         newidx = (newidx.sort_values("_pref", kind="stable")
                         .drop_duplicates(subset=["dac", "wmo"], keep="last")
                         .drop(columns="_pref"))
+        # deterministic order so the weekly refresh only commits real changes
+        newidx = newidx.sort_values(["dac", "wmo"]).reset_index(drop=True)
         newidx.to_parquet(idx_path)
 
     # ---- merge manifest across prior runs (dedup by dac+wmo) ----

@@ -189,6 +189,12 @@ def main():
                          pt.fillna("").str.contains(r"_D\b|_D_|XUANWU|HM4000",
                                                     case=False, regex=True))
 
+    # deterministic row order so re-runs with no new floats produce identical
+    # files (the weekly refresh cron then only commits when data actually changes)
+    floats = floats.sort_values("wmo").reset_index(drop=True)
+    sensors = (sensors.sort_values(["wmo", "sensor", "sensor_serial_no"])
+               .reset_index(drop=True))
+
     floats.to_parquet(os.path.join(root, "floats.parquet"))
     sensors.to_parquet(os.path.join(root, "sensors.parquet"))
 

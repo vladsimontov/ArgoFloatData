@@ -1,0 +1,70 @@
+name: Refresh Argo metadata
+
+# Rebuilds the searchable float index so newly-deployed Argo floats show up.
+# Incremental: the meta.nc files are cached between runs, so each run only
+# downloads metadata for floats that are new since last time. The bulky data
+# is never stored — it's still fetched on demand by the app.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"      # weekly, Mondays 05:17 UTC
+  workflow_dispatch: {}        # allow manual "Run workflow"
+
+# only one refresh at a time; let a run finish rather than cancel it
+concurrency:
+  group: refresh-metadata
+  cancel-in-progress: false
+
+permissions:
+  contents: write              # to commit the updated parquets back
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (only the sync + crosswalk deps)
+        run: pip install pandas numpy requests tqdm netCDF4 pyarrow
+
+      # Cache the downloaded meta.nc + index between runs. A unique key always
+      # saves a fresh cache; restore-keys pulls the most recent prior one, so
+      # only NEW floats' metadata is downloaded each week.
+      - name: Restore metadata cache
+        uses: actions/cache@v4
+        with:
+          path: argo_local
+          key: argo-meta-${{ github.run_id }}
+          restore-keys: |
+            argo-meta-
+
+      - name: Refresh index (new floats only; cached metas are skipped)
+        run: |
+          python sync_bgc_subset.py --root ./argo_local \
+            --dataset both --meta-only --limit-floats 0 --refresh-index
+          python build_crosswalk.py --root ./argo_local
+
+      - name: Commit updated index if new floats appeared
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # stage only the data parquets; manifest.json holds a timestamp that
+          # changes every run, so add it only when the parquets actually changed
+          git add argo_local/sensors.parquet argo_local/floats.parquet \
+                  argo_local/bgc_float_index.parquet
+          if git diff --cached --quiet; then
+            echo "No new floats this run — nothing to commit."
+          else
+            git add argo_local/manifest.json
+            git commit -m "chore: weekly Argo metadata refresh [skip ci]"
+            git pull --rebase origin main || true
+            git push
+            echo "Pushed refreshed index — Streamlit Cloud will redeploy."
+          fi
