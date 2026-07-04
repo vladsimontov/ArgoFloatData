@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data API — Argo Float Data Explorer</title>
+<meta name="description" content="Free HTTP data API for the whole Argo float array: query floats and sensors by serial number, model, WMO, region, or type with DuckDB or pandas — including sensor-serial lookups the GDAC, ERDDAP and Argovis don't offer.">
+<meta name="keywords" content="Argo API, Argo data API, Argo sensor serial number lookup, DuckDB Argo, Argo parquet, BGC-Argo API, Deep Argo API, SBE61">
+<link rel="canonical" href="https://vladsimontov.github.io/ArgoFloatData/api.html">
+<meta property="og:title" content="Argo Float Data Explorer — free data API">
+<meta property="og:description" content="Query the whole Argo array by sensor serial number, model, WMO, region or type with DuckDB or pandas over HTTP.">
+<meta property="og:url" content="https://vladsimontov.github.io/ArgoFloatData/api.html">
+<meta property="og:image" content="https://vladsimontov.github.io/ArgoFloatData/og-image.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
+<style>
+  :root{--bg:#f6f9fc;--card:#fff;--ink:#0b2540;--muted:#4a6480;--line:#e2ebf3;
+    --brand:#0a6ebd;--brand2:#0ea5a5;--code:#0b1f30;--codebg:#eef4fa;
+    --shadow:0 1px 3px rgba(11,37,64,.08),0 8px 24px rgba(11,37,64,.06);}
+  @media (prefers-color-scheme:dark){:root{--bg:#0a1420;--card:#101f30;--ink:#e8f1fa;
+    --muted:#9db4cb;--line:#1e3448;--brand:#3aa0e8;--brand2:#2dd4bf;--code:#d6e6f5;
+    --codebg:#0c1a29;--shadow:0 1px 3px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+  .wrap{max-width:860px;margin:0 auto;padding:0 20px}
+  header{background:linear-gradient(160deg,#062a45,#0a5a8f 60%,#0e8f8f);color:#eaf6ff;
+    padding:40px 0 34px}
+  header .wrap{display:flex;flex-direction:column;gap:.4em}
+  header a.back{color:#cfe9fb;font-size:.9rem}
+  h1{font-size:2rem;margin:.1em 0;font-weight:800;letter-spacing:-.02em}
+  header p{margin:.2em 0 0;color:#cfe9fb;max-width:640px}
+  section{padding:34px 0}
+  h2{font-size:1.35rem;margin:0 0 .3em;letter-spacing:-.01em}
+  h3{font-size:1.02rem;margin:1.3em 0 .3em}
+  p{color:var(--muted)}p.tight{margin:.3em 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;box-shadow:var(--shadow);margin:14px 0}
+  table{border-collapse:collapse;width:100%;font-size:.92rem}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600}
+  code{background:var(--codebg);color:var(--code);padding:.12em .4em;border-radius:5px;
+    font-size:.86em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  pre{background:var(--codebg);color:var(--code);padding:16px 18px;border-radius:10px;
+    overflow-x:auto;border:1px solid var(--line);font-size:.86rem;line-height:1.5}
+  pre code{background:none;padding:0}
+  .pill{display:inline-block;background:var(--brand2);color:#fff;font-size:.72rem;
+    font-weight:700;padding:.15em .6em;border-radius:20px;vertical-align:middle}
+  footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <a class="back" href="./">← Argo Float Data Explorer</a>
+    <h1>🛰️ Data API</h1>
+    <p>Query the <strong>whole Argo array</strong> — by sensor <strong>serial
+      number</strong>, model, WMO, region, or type — straight over HTTP with DuckDB
+      or pandas. Free, no key, no rate limit. Data © Argo, CC&nbsp;BY&nbsp;4.0.</p>
+  </div>
+</header>
+
+<section class="wrap">
+  <h2>What makes it useful <span class="pill">unique</span></h2>
+  <p>The GDAC is a file server; <a href="https://argopy.readthedocs.io">argopy</a>,
+    <a href="https://argovis.colorado.edu">Argovis</a>, and ERDDAP already do
+    excellent space/time/parameter queries of <em>profile data</em> — use those for
+    that. What none of them offer is a <strong>serial-number / sensor index</strong>:
+    going from a physical CTD or optode (its serial, model, or maker) to the float
+    it's on. That's this API's reason to exist.</p>
+
+  <h2>Endpoints</h2>
+  <p class="tight">Base: <code>https://vladsimontov.github.io/ArgoFloatData/api/</code></p>
+  <div class="card">
+  <table>
+    <tr><th>File</th><th>What</th><th>Rows</th></tr>
+    <tr><td><a href="api/sensors.parquet"><code>sensors.parquet</code></a></td>
+        <td>one row per (float, sensor): WMO, sensor, model, maker, <strong>serial no.</strong></td><td>~75k</td></tr>
+    <tr><td><a href="api/floats.parquet"><code>floats.parquet</code></a></td>
+        <td>one row per float: type, platform, position, params, data path</td><td>~20k</td></tr>
+    <tr><td><a href="api/floats.json"><code>floats.json</code></a></td>
+        <td>compact per-float index for JS/browser use (each row has its GDAC <code>data_url</code>)</td><td>~20k</td></tr>
+    <tr><td><a href="api/index.json"><code>index.json</code></a></td>
+        <td>self-describing manifest: files, schema, counts</td><td>—</td></tr>
+  </table>
+  </div>
+
+  <h2>Query it</h2>
+
+  <h3>DuckDB — SQL straight over HTTP (nothing to download)</h3>
+  <pre><code>-- Which float carries CTD serial 17106?
+SELECT wmo, sensor, sensor_model, sensor_maker
+FROM 'https://vladsimontov.github.io/ArgoFloatData/api/sensors.parquet'
+WHERE sensor_serial_no = '17106';
+
+-- Every 6000 m Deep float (SBE61 CTD) — a lookup no other Argo API offers
+SELECT DISTINCT wmo, sensor_serial_no
+FROM 'https://vladsimontov.github.io/ArgoFloatData/api/sensors.parquet'
+WHERE sensor_model = 'SBE61';
+
+-- BGC floats in a lat/lon box, with each float's GDAC data file
+SELECT wmo, last_lat, last_lon, expected_rel
+FROM 'https://vladsimontov.github.io/ArgoFloatData/api/floats.parquet'
+WHERE data_kind = 'bgc'
+  AND last_lat BETWEEN 30 AND 45 AND last_lon BETWEEN -10 AND 40;</code></pre>
+
+  <h3>pandas</h3>
+  <pre><code>import pandas as pd
+B = "https://vladsimontov.github.io/ArgoFloatData/api/"
+sensors = pd.read_parquet(B + "sensors.parquet")
+sensors.query("sensor_model == 'SBE61'")[["wmo", "sensor_serial_no"]]</code></pre>
+
+  <h3>JavaScript / any HTTP client</h3>
+  <pre><code>const floats = await (await fetch(
+  "https://vladsimontov.github.io/ArgoFloatData/api/floats.json")).json();
+const deep = floats.filter(f =&gt; f.deep);   // each row has f.data_url (GDAC NetCDF)</code></pre>
+
+  <h2>Getting the actual profile data</h2>
+  <p>Every float row carries a <code>data_url</code> / <code>expected_rel</code>
+    pointing at its NetCDF on the GDAC — fetch that directly, or for gridded
+    space/time queries use <a href="https://argopy.readthedocs.io">argopy</a> /
+    ERDDAP / <a href="https://argovis.colorado.edu">Argovis</a>. This API doesn't
+    rehost the ~200&nbsp;GB of profile data; it indexes it.</p>
+
+  <h2>License &amp; citation</h2>
+  <p>Argo data are © the International Argo Program under
+    <a href="https://creativecommons.org/licenses/by/4.0/">CC&nbsp;BY&nbsp;4.0</a>.
+    Cite: Argo (2026). <em>Argo float data and metadata from Global Data Assembly
+    Centre (Argo GDAC).</em> SEANOE. <a href="https://doi.org/10.17882/42182">https://doi.org/10.17882/42182</a>.
+    The index refreshes weekly.</p>
+</section>
+
+<footer class="wrap">
+  <a href="./">← Back to the explorer</a> ·
+  <a href="https://github.com/vladsimontov/ArgoFloatData">GitHub</a> ·
+  Built with the help of Claude. Not affiliated with the Argo Program. 🌊
+</footer>
+
+</body>
+</html>

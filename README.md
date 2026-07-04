@@ -106,6 +106,26 @@ secrets required — optional env vars: `ARGO_GDAC` (data mirror) and `ARGO_ISSU
 (bug-report link). The weekly workflow keeps the index fresh and Streamlit redeploys
 on each push.
 
+## Data API
+
+A free, no-key HTTP data API is published under
+[`/api/`](https://vladsimontov.github.io/ArgoFloatData/api/) — query the whole array
+by **sensor serial number**, model, WMO, region, or type with DuckDB or pandas (the
+serial/sensor lookup is something the GDAC, ERDDAP, and Argovis don't offer). Docs:
+**https://vladsimontov.github.io/ArgoFloatData/api.html**
+
+```sql
+-- every 6000 m Deep float (SBE61 CTD), straight over HTTP
+SELECT DISTINCT wmo
+FROM 'https://vladsimontov.github.io/ArgoFloatData/api/sensors.parquet'
+WHERE sensor_model = 'SBE61';
+```
+
+Files: `api/floats.parquet`, `api/sensors.parquet`, `api/floats.json` (each row
+carries its GDAC `data_url`), `api/index.json` (manifest). Regenerated weekly by
+`build_api.py`. Profile data itself is fetched from the GDAC — this API indexes it,
+it doesn't rehost it.
+
 ## Good to know
 
 - **The GDAC is mutable** — delayed-mode QC and reprocessing rewrite old files. The
@@ -127,9 +147,10 @@ on each push.
 | `argo_dashboard.py` | the Streamlit app |
 | `sync_bgc_subset.py` | download meta.nc (and optionally data) for BGC/core floats |
 | `build_crosswalk.py` | parse meta.nc → `sensors.parquet`, `floats.parquet` |
+| `build_api.py` | publish the crosswalk as the `docs/api/` data API |
 | `argo_local/*.parquet` | the committed metadata index (search + dossier) |
-| `docs/` | GitHub Pages landing page |
-| `.github/workflows/refresh-metadata.yml` | weekly index auto-refresh |
+| `docs/` | GitHub Pages landing page + `api.html` docs + `api/` data files |
+| `.github/workflows/refresh-metadata.yml` | weekly index + API auto-refresh |
 
 ## Acknowledgements, data source & license
 

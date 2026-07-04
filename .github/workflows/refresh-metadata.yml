@@ -50,6 +50,7 @@ jobs:
           python sync_bgc_subset.py --root ./argo_local \
             --dataset both --meta-only --limit-floats 0 --refresh-index
           python build_crosswalk.py --root ./argo_local
+          python build_api.py --root ./argo_local --out ./docs/api
 
       - name: Commit updated index if new floats appeared
         run: |
@@ -58,7 +59,7 @@ jobs:
           # stage only the data parquets; manifest.json holds a timestamp that
           # changes every run, so add it only when the parquets actually changed
           git add argo_local/sensors.parquet argo_local/floats.parquet \
-                  argo_local/bgc_float_index.parquet
+                  argo_local/bgc_float_index.parquet docs/api/
           if git diff --cached --quiet; then
             echo "No new floats this run — nothing to commit."
           else

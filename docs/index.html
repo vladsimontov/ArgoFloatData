@@ -131,7 +131,8 @@
     <div class="cta-row">
       <!-- APP_URL — confirm this matches your live Streamlit subdomain -->
       <a class="cta" href="https://argofloat.streamlit.app">Launch the app →</a>
-      <a class="cta ghost" href="https://github.com/vladsimontov/ArgoFloatData">View on GitHub</a>
+      <a class="cta ghost" href="api.html">Data API</a>
+      <a class="cta ghost" href="https://github.com/vladsimontov/ArgoFloatData">GitHub</a>
     </div>
   </div>
 </header>
@@ -196,6 +197,21 @@
     Centre (Argo GDAC)</em>. SEANOE. <code>https://doi.org/10.17882/42182</code>.
     Derived quantities shown here are not official Argo products.
   </div>
+</section>
+
+<section class="wrap">
+  <h2>🛰️ Free data API — for developers</h2>
+  <p class="lead">Query the whole array by <strong>sensor serial number</strong>,
+    model, WMO, region, or type — straight over HTTP with DuckDB or pandas. No key,
+    no rate limit. The serial/sensor lookup is something the GDAC, ERDDAP, and
+    Argovis don't offer.</p>
+  <pre style="background:#0c1a29;color:#d6e6f5;padding:16px 18px;border-radius:10px;
+    overflow-x:auto;border:1px solid var(--line);font:0.84rem/1.5 ui-monospace,
+    Menlo,Consolas,monospace"><span style="color:#7fb4d8">-- Every 6000 m Deep float (SBE61 CTD), in one query:</span>
+SELECT DISTINCT wmo FROM
+  'https://vladsimontov.github.io/ArgoFloatData/api/sensors.parquet'
+WHERE sensor_model = 'SBE61';</pre>
+  <p><a href="api.html"><strong>Read the API docs →</strong></a></p>
 </section>
 
 <footer class="wrap">

@@ -1,0 +1,78 @@
+{
+  "base_url": "https://vladsimontov.github.io/ArgoFloatData/api/",
+  "counts": {
+    "bgc": 2895,
+    "core": 17426,
+    "deep": 581,
+    "floats": 20321,
+    "sensor_rows": 75345
+  },
+  "data_through": 20260704140030,
+  "description": "Search the whole Argo array by sensor serial number, model, WMO, region, or type. Query the Parquet files directly with DuckDB or pandas over HTTP.",
+  "files": {
+    "floats.json": {
+      "columns": [
+        "wmo",
+        "type",
+        "deep",
+        "dac",
+        "platform_type",
+        "last_lat",
+        "last_lon",
+        "last_date",
+        "n_profiles",
+        "data_url"
+      ],
+      "rows": 20321
+    },
+    "floats.parquet": {
+      "columns": [
+        "dac",
+        "data_kind",
+        "data_suffix",
+        "expected_rel",
+        "float_serial_no",
+        "has_local_sprof",
+        "is_deep",
+        "last_date",
+        "last_lat",
+        "last_lon",
+        "launch_date",
+        "n_profiles",
+        "parameters",
+        "parameters_meta",
+        "pi_name",
+        "platform_family",
+        "platform_maker",
+        "platform_type",
+        "profiler_type",
+        "project_name",
+        "sprof_path",
+        "wmo",
+        "wmo_inst_type"
+      ],
+      "rows": 20321
+    },
+    "sensors.parquet": {
+      "columns": [
+        "dac",
+        "float_serial_no",
+        "launch_date",
+        "pi_name",
+        "platform_family",
+        "platform_maker",
+        "platform_type",
+        "project_name",
+        "sensor",
+        "sensor_maker",
+        "sensor_model",
+        "sensor_serial_no",
+        "wmo",
+        "wmo_inst_type"
+      ],
+      "rows": 75345
+    }
+  },
+  "license": "Argo data: CC BY 4.0 \u2014 cite https://doi.org/10.17882/42182",
+  "name": "Argo Float Data Explorer \u2014 data API"
+}
