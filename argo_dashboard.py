@@ -633,6 +633,24 @@ if not measurands:
                   and not v.endswith(("_QC", "_ADJUSTED", "_ADJUSTED_QC",
                                       "_ADJUSTED_ERROR"))]
 
+# WMO tag stamped on every plot: makes clear which float a chart is for and that
+# it isn't stale (latest-profile date + cycle count are freshness signals)
+_last_juld = pd.Series(ds["JULD"].values).max() if "JULD" in ds else pd.NaT
+_ncyc = int(ds.sizes.get("N_PROF", 0))
+float_tag = f"Float {sel_wmo}"
+if pd.notna(_last_juld):
+    float_tag += f"  ·  latest profile {pd.Timestamp(_last_juld):%Y-%m-%d}"
+if _ncyc:
+    float_tag += f"  ·  {_ncyc} cycles"
+
+
+def _titled(fig, text):
+    fig.update_layout(title=dict(text=text, x=0.0, xanchor="left",
+                                 font=dict(size=13)),
+                      margin=dict(t=48))
+    return fig
+
+
 # trajectory map (plotly, no token needed)
 lat = ds["LATITUDE"].values if "LATITUDE" in ds else None
 lon = ds["LONGITUDE"].values if "LONGITUDE" in ds else None
@@ -649,6 +667,7 @@ if lat is not None and lon is not None and np.isfinite(lat).any():
                         landcolor="rgb(240,240,235)", showcountries=True)
     fig_map.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=0),
                           showlegend=False)
+    _titled(fig_map, f"{float_tag} — trajectory")
     st.plotly_chart(fig_map, width="stretch")
 
 # controls
@@ -682,6 +701,7 @@ if param:
                          height=560)
         fig.update_yaxes(autorange="reversed")  # depth downward
         fig.update_traces(marker=dict(size=4))
+        _titled(fig, f"{float_tag} — {param} profile")
         st.plotly_chart(fig, width="stretch")
 
         # ---- downloads ----
@@ -727,6 +747,7 @@ if param:
             fig_sec.update_layout(height=440, xaxis_title="time",
                                   margin=dict(l=0, r=0, t=10, b=0),
                                   legend=dict(orientation="h", y=1.02))
+            _titled(fig_sec, f"{float_tag} — {param} depth–time section")
             st.plotly_chart(fig_sec, width="stretch")
             st.caption("Each profile linearly interpolated onto a common pressure "
                        "grid. White dotted line = mixed-layer depth (where computed).")
@@ -767,6 +788,7 @@ if param:
             fig_ts_d.update_layout(
                 height=520, xaxis_title=f"{xn} [{xu}]", yaxis_title=f"{yn} [{yu}]",
                 margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
+            _titled(fig_ts_d, f"{float_tag} — T–S diagram")
             st.plotly_chart(fig_ts_d, width="stretch")
             st.caption("Grey contours = potential density σ₀ (kg/m³); points colored "
                        "by pressure. Water masses cluster along isopycnals."
@@ -871,6 +893,7 @@ if param:
                 fig_ts.update_layout(height=460, xaxis_title="time",
                                      yaxis_title=ylab, legend_title="season",
                                      margin=dict(l=0, r=0, t=10, b=0))
+                _titled(fig_ts, f"{float_tag} — {param} at {target_p:g} dbar")
                 st.plotly_chart(fig_ts, width="stretch")
 
                 # trend statistics panel
