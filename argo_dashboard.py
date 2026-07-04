@@ -397,28 +397,26 @@ if sensors is None:
     )
     st.stop()
 
-# freshness banner: how many of each float type + when last synced
-local = floats[floats["has_local_sprof"]] if "has_local_sprof" in floats else floats.iloc[0:0]
-kind = local["data_kind"] if "data_kind" in local else pd.Series(dtype=object)
+# freshness banner: counts across the WHOLE index (not just locally-cached data)
+kind = floats["data_kind"] if "data_kind" in floats else pd.Series(dtype=object)
 n_bgc = int((kind == "bgc").sum())
 n_core = int((kind == "core").sum())
-n_deep = int(local["is_deep"].sum()) if "is_deep" in local else 0
-n_sbe61 = (int(local["wmo"].astype(str).isin(
-              sensors.loc[sensors["sensor_model"].fillna("").str.contains("SBE61"),
-                          "wmo"].astype(str)).sum())
+n_deep = int(floats["is_deep"].sum()) if "is_deep" in floats else 0
+n_sbe61 = (sensors.loc[sensors["sensor_model"].fillna("").str.contains("SBE61"),
+                       "wmo"].astype(str).nunique()
            if "sensor_model" in sensors else 0)
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Floats indexed", f"{floats['wmo'].nunique():,}",
-          help="Unique floats in the local crosswalk (searchable).")
-c2.metric("BGC floats", f"{n_bgc:,}", help="With local synthetic (Sprof) data.")
-c3.metric("Core floats", f"{n_core:,}", help="With local physical (prof.nc) data.")
+          help="Every float searchable in this tool.")
+c2.metric("BGC floats", f"{n_bgc:,}", help="Carry biogeochemical sensors (Sprof).")
+c3.metric("Core floats", f"{n_core:,}", help="Physical T/S floats (prof.nc).")
 c4.metric("Deep floats", f"{n_deep:,}",
-          help=f"PLATFORM_FAMILY = FLOAT_DEEP · {n_sbe61} with SBE61 (6000 m).")
+          help=f"PLATFORM_FAMILY = FLOAT_DEEP · {n_sbe61:,} with SBE61 (6000 m).")
 c5.metric("Last synced (UTC)", mani.get("synced_utc", "—"),
-          help="From the local manifest; re-run sync + crosswalk to refresh.")
-st.caption(f"{int(local['has_local_sprof'].sum()) if 'has_local_sprof' in local else 0:,} "
-           "floats with local data · the GDAC is mutable (delayed-mode QC rewrites "
-           "history), so re-sync regularly and pin a DOI snapshot for publications.")
+          help="When the metadata index was last refreshed.")
+st.caption("Float data is fetched on demand from the Argo GDAC when you open a float"
+           " · the GDAC is mutable (delayed-mode QC rewrites history), so the index "
+           "is refreshed periodically; pin a DOI snapshot for publications.")
 
 # ---- acknowledgements · data source · license (always visible) ----
 with st.expander("🙏 Acknowledgements · data source · license", expanded=False):
