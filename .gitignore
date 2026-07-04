@@ -1,0 +1,41 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.Python
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# ---- Streamlit ----
+# never commit secrets (ARGO_ISSUES_URL etc. go here on Streamlit Cloud)
+.streamlit/secrets.toml
+
+# ---- interrupted downloads ----
+*.part
+
+# ---- Argo local data directory --------------------------------------------
+# Allowlist: ignore everything in argo_local/ EXCEPT the small (~12 MB) metadata
+# the app needs. The bulky NetCDF profiles (argo_local/dac/**, ~100s of GB at
+# full scale) are fetched from the GDAC on demand, and the cached GDAC index
+# files are tens–hundreds of MB — keep them all OUT of git.
+argo_local/*
+!argo_local/sensors.parquet
+!argo_local/floats.parquet
+!argo_local/bgc_float_index.parquet
+!argo_local/manifest.json
+
+# any stray NetCDF / index caches elsewhere
+*.nc
+*_index*.txt
+*_index*.txt.gz
