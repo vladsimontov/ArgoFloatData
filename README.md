@@ -1,103 +1,138 @@
-# BGC-Argo Explorer
+# 🌊 Argo Float Data Explorer
 
-A local, PI-facing dashboard for BGC-Argo floats: look up a sensor **serial
-number** (e.g. an SBE41 CTD), see the float it belongs to, every other sensor on
-that float, the measurands on board, where the float is, and interactive plots —
-with QC / data-mode handling built in. All served from a bounded (~5 GB) local
-copy of the most-recent BGC data.
+Search and visualize the **entire global Argo float array** — BGC, core, and
+Deep Argo (SBE61 6000 m) — by sensor **serial number**, model, WMO, or region.
+Look up a CTD serial like `SBE41` or `SBE61`, find the float it belongs to, every
+other sensor on board, where it's been, and what it's measured — then plot
+profiles, depth–time sections, T–S diagrams, and multi-year trends. Float data is
+streamed **live from the Argo GDAC** on demand, so the whole ~20,000-float array is
+searchable from a repo just a few megabytes in size.
 
-> **License:** code is [MIT](LICENSE); the bundled Argo metadata and any Argo
-> data this tool retrieves are © the International Argo Program under
+**▶ Live app: https://argofloat.streamlit.app** &nbsp;·&nbsp;
+**About / landing: https://vladsimontov.github.io/ArgoFloatData/**
+
+> **License:** code is [MIT](LICENSE); Argo data (the bundled metadata index and any
+> profiles the app retrieves) is © the International Argo Program under
 > [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) — see
-> [Acknowledgements, data source & license](#acknowledgements-data-source--license).
+> [Acknowledgements](#acknowledgements-data-source--license).
 
-## Install
+---
+
+## What it does
+
+- **Find any float** — search **20,320 floats** by CTD/sensor serial number, sensor
+  model (SBE41, SBE41CP, **SBE61**, optodes, ECO, SUNA…), WMO number, or region.
+  Argo has no native serial→float index, so this builds one from every float's
+  `meta.nc`.
+- **Float dossier** — float serial, WMO, DAC, platform type/maker, **all sensors**,
+  measurands on board, **days deployed**, last position, an approximate **region**
+  (climate band + ocean basin), and which data file backs it (BGC vs core).
+- **Interactive plots** (Plotly, WebGL-accelerated):
+  - **Trajectory map** of the float's cycles.
+  - **Vertical profiles** — raw or `*_ADJUSTED`, QC-flag aware, colored by date.
+  - **Depth–time section** (Hovmöller) with a mixed-layer-depth overlay.
+  - **Temperature–Salinity diagram** with σ₀ density contours.
+  - **Time series at a chosen pressure** — nearest-level, colored by season, with a
+    **Sen's-slope + Mann–Kendall** trend test and optional deseasonalizing.
+- **TEOS-10 derived fields** (via `gsw`): potential density σ₀, conservative &
+  potential temperature, absolute salinity, apparent oxygen utilization, and mixed
+  layer depth — all computed on the fly.
+- **Download** any parameter as CSV, or the full float as NetCDF.
+- Every plot is stamped with the float's **WMO + latest-profile date** so a chart is
+  never mistaken for another float or a stale view.
+
+## How it works
+
+The app stores only a **compact metadata index** (a few MB of Parquet) covering the
+whole array, so search and the dossier are instant. When you open a float, its full
+profile file (`<wmo>_Sprof.nc` for BGC, `<wmo>_prof.nc` for core/deep) is **fetched
+live from the Argo GDAC** and cached — the ~150–250 GB of bulk data never has to be
+hosted. A weekly [GitHub Action](.github/workflows/refresh-metadata.yml) refreshes
+the index so newly deployed floats appear automatically.
+
+```
+meta.nc (all floats)  ──build_crosswalk──▶  sensors/floats.parquet  ──▶  search + dossier
+                                                                          │  (on float open)
+                                            Argo GDAC  ──fetch on demand──▶  profiles + plots
+```
+
+## Coverage: BGC, Core & Deep Argo
+
+| kind | file | what | count |
+|---|---|---|---|
+| **BGC** | `Sprof.nc` | biogeochemical (O₂, chl-a, nitrate, pH, irradiance…) synthetic profiles | ~2,900 |
+| **Core** | `prof.nc` | physical temperature/salinity floats | ~17,400 |
+| **Deep** | `prof.nc` | Deep Argo (4000–6000 m); SBE61 6000 m = Deep SOLO / APEX / Xuanwu | ~580 (≈350 SBE61) |
+
+All physical plots work on every float; BGC-only parameters simply stay empty for
+core/deep floats.
+
+## Run your own instance
+
+The repo ships the metadata index for the whole array, so it runs immediately:
+
 ```bash
 pip install -r requirements.txt
-```
-
-## Run order (three steps)
-```bash
-# 1. Download: meta.nc (small) + most-recent data files up to a size budget.
-python sync_bgc_subset.py --root ./argo_local --budget-gb 5          # BGC (default)
-#    quick first test: add --limit-floats 50
-
-# 2. Build the serial/sensor crosswalk from the meta files.
-python build_crosswalk.py --root ./argo_local
-
-# 3. Launch the UI.
 streamlit run argo_dashboard.py -- --root ./argo_local
 ```
-To refresh later, re-run steps 1–2 (downloads resume; existing files are skipped).
 
-### Core (physical T/S) and Deep Argo floats
-BGC is the default. To also pull **core** floats — the physical T/S array, which is
-how you reach **Deep Argo / SBE61 6000 m** floats (they carry no BGC sensors) — use
-`--dataset core` (or `both`). Core reads the core-profile index (~20k floats) and
-downloads `<wmo>_prof.nc`; all the physical plots (profiles, sections, T–S, σ₀, MLD,
-trends) work on them, BGC-only plots stay empty.
-```bash
-python sync_bgc_subset.py --root ./argo_local --dataset core --limit-floats 50
-# a specific float (ignores the size budget):
-python sync_bgc_subset.py --root ./argo_local --dataset core --wmo 4902911
-python build_crosswalk.py --root ./argo_local          # then rebuild the crosswalk
-```
-The index is cached locally after the first fetch; add `--refresh-index` to re-pull.
-Once core floats are ingested, search **sensor model `SBE61`** in the sidebar to find
-the 6000 m Deep floats.
+Search works for all ~20,000 floats out of the box; each float's data is fetched from
+the GDAC the first time you open it.
 
-### Recommended for a public deployment: metadata for everything + fetch on demand
-Rather than mirror the whole ~150–250 GB array, pull **only the metadata for every
-float** (small: ~12 MB of parquets, a one-time ~1 GB meta download) and let the app
-**fetch each float's data file from the GDAC on demand** the first time it's opened
-(cached thereafter). Search/dossier work for the entire array; only the plots trigger
-a fetch.
+### Rebuild or scope the index yourself (optional)
+
+The pipeline is `sync → build_crosswalk → run`:
+
 ```bash
-# one-time metadata pull for the whole array (BGC + core), no data files
+# Full array, metadata only (~1 GB one-time meta download, resumable) — recommended
 python sync_bgc_subset.py --root ./argo_local --dataset both --meta-only --limit-floats 0
-python build_crosswalk.py --root ./argo_local
-streamlit run argo_dashboard.py -- --root ./argo_local
+python build_crosswalk.py  --root ./argo_local
+
+# …or a small scoped set with data downloaded (immediately plottable, no fetch):
+python sync_bgc_subset.py --root ./argo_local --dataset bgc  --limit-floats 20
+python sync_bgc_subset.py --root ./argo_local --dataset core --profiler-type 849,862,874,882 --limit-floats 20  # SBE61 deep
+python build_crosswalk.py  --root ./argo_local
 ```
-The meta download is resumable (existing files skipped). Set `ARGO_GDAC` to point the
-on-demand fetch at a mirror (e.g. the AWS Open Data S3 mirror) instead of Ifremer.
-Re-run the two build steps periodically to pick up newly deployed floats.
 
-## How the three requirements are met
-- **Serial-number lookup** — no such index exists in Argo, so `build_crosswalk.py`
-  parses `SENSOR_SERIAL_NO` / `SENSOR_MODEL` / `FLOAT_SERIAL_NO` out of every
-  `meta.nc` into `sensors.parquet`. The sidebar searches it.
-- **Float dossier** — Float SN, WMO, DAC, platform type, and **all sensors** on
-  the float come straight from that crosswalk.
-- **Measurands + location + plots** — read from each float's `Sprof.nc`; map and
-  depth profiles render with Plotly.
+`--dataset` = `bgc` | `core` | `both`. `--meta-only` skips the bulky data (fetched on
+demand). The GDAC index is cached; `--refresh-index` re-pulls it. `ARGO_GDAC` points
+the on-demand fetch at a mirror (e.g. the AWS Open Data S3 mirror) instead of Ifremer.
 
-## Honest limitations (read these)
-- **Not yet tested against live data.** It was written offline against the
-  ArgoPy 1.4.0 cheatsheet and the documented Argo v3.1 file layout. Spots that may
-  need a one-line fix are marked `VERIFY` in the code. If a plot is empty or a path
-  404s, that's the first place to look.
-- **Sprof, not raw counts.** The 5 GB subset holds *synthetic* profiles
-  (QC'd/adjusted, science-ready). Intermediate/raw sensor signals live in the
-  **B-files**, which are not in this subset. The dashboard can fetch a single
-  float's data on demand; extend that to B-files if you need raw signals for
-  diagnostics.
-- **Serial matching is fuzzy.** Serial formats vary by DAC (padding, prefixes,
-  `SBE41` vs `SBE41CP`). Search is case-insensitive substring; confirm a hit by
-  cross-checking model + maker.
-- **The dataset is mutable.** Delayed-mode QC and reprocessing rewrite old files.
-  Re-sync regularly; for reproducible figures, pin an `ArgoDOI()` monthly snapshot.
-- **Defaults encode QC guidance, not a fix.** The UI prefers `*_ADJUSTED` and
-  filters QC flags {1,2,5,8} by default and shows the data mode — it makes the data
-  state legible; it does not correct sensor drift.
+## Deploy
+
+Deployed free on **Streamlit Community Cloud** from this repo (main file
+`argo_dashboard.py`); the [`docs/`](docs/) landing page is served by GitHub Pages. No
+secrets required — optional env vars: `ARGO_GDAC` (data mirror) and `ARGO_ISSUES_URL`
+(bug-report link). The weekly workflow keeps the index fresh and Streamlit redeploys
+on each push.
+
+## Good to know
+
+- **The GDAC is mutable** — delayed-mode QC and reprocessing rewrite old files. The
+  index refreshes weekly; for reproducible figures, pin a monthly
+  [DOI snapshot](https://doi.org/10.17882/42182).
+- **Synthetic/physical profiles, not raw counts.** Sprof/prof are QC'd, science-ready
+  profiles; intermediate raw sensor signals live in the B-files (not used here).
+- **Serial matching is fuzzy** — formats vary by DAC (padding, prefixes, `SBE41` vs
+  `SBE41CP`). Search is case-insensitive substring; confirm a hit with model + maker.
+- **Defaults encode QC guidance, not a fix.** The UI prefers `*_ADJUSTED`, keeps QC
+  flags {1,2,5,8}, and shows the data mode (R/A/D) — it makes the data state legible,
+  it doesn't correct sensor drift. Derived quantities are **not official Argo
+  products**.
 
 ## Files
-| file | purpose |
+
+| path | purpose |
 |---|---|
-| `sync_bgc_subset.py` | download bounded local BGC/core mini-GDAC + manifest |
-| `build_crosswalk.py` | meta.nc → `sensors.parquet`, `floats.parquet` |
-| `argo_dashboard.py` | Streamlit UI |
+| `argo_dashboard.py` | the Streamlit app |
+| `sync_bgc_subset.py` | download meta.nc (and optionally data) for BGC/core floats |
+| `build_crosswalk.py` | parse meta.nc → `sensors.parquet`, `floats.parquet` |
+| `argo_local/*.parquet` | the committed metadata index (search + dossier) |
+| `docs/` | GitHub Pages landing page |
+| `.github/workflows/refresh-metadata.yml` | weekly index auto-refresh |
 
 ## Acknowledgements, data source & license
+
 Thank you to the **International Argo Program** and the ~30 nations — their
 governments, agencies, engineers, and scientists — who fund, build, deploy, quality-
 control, and *freely* share these floats with the world. 🌊
