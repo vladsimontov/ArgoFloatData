@@ -727,16 +727,37 @@ if param:
         st.warning("No finite points after selection. Try toggling ADJUSTED/QC — "
                    "this parameter may only exist in raw form for this float.")
     else:
-        color = "time" if "time" in df else "cycle"
         def _axis_label(var):
             units = ds[var].attrs.get("units") if var in ds else None
             return f"{var} [{units}]" if units else var
-        fig = px.scatter(df, x="value", y="pres", color=color,
-                         labels={"value": _axis_label(vcol),
-                                 "pres": _axis_label(pcol)},
-                         height=560)
-        fig.update_yaxes(autorange="reversed")  # depth downward
-        fig.update_traces(marker=dict(size=4))
+        vlabel, plabel = _axis_label(vcol), _axis_label(pcol)
+        # WebGL (Scattergl) renders 100k+ points instantly and stays smooth on
+        # zoom/pan; color by time as a compact colorbar, not a 200+ entry legend.
+        if "time" in df.columns:
+            _t = pd.to_datetime(df["time"])
+            cvals = _t.astype("int64").astype("float64")
+            cvals[_t.isna().to_numpy()] = np.nan
+            _lo, _hi = np.nanmin(cvals), np.nanmax(cvals)
+            _tv = list(np.linspace(_lo, _hi, 5)) if np.isfinite(_lo) else []
+            cbar = dict(title="date", tickvals=_tv,
+                        ticktext=[pd.Timestamp(int(t)).strftime("%Y-%m-%d")
+                                  for t in _tv])
+            cdata = _t.dt.strftime("%Y-%m-%d").to_numpy()
+            hover = (f"{vcol}=%{{x:.4g}}<br>{pcol}=%{{y:.1f}} dbar"
+                     "<br>%{customdata}<extra></extra>")
+        else:
+            cvals = df["cycle"].to_numpy()
+            cdata = cvals
+            cbar = dict(title="cycle")
+            hover = (f"{vcol}=%{{x:.4g}}<br>{pcol}=%{{y:.1f}} dbar"
+                     "<br>cycle %{customdata}<extra></extra>")
+        fig = go.Figure(go.Scattergl(
+            x=df["value"], y=df["pres"], mode="markers",
+            marker=dict(size=4, color=cvals, colorscale="Viridis", colorbar=cbar),
+            customdata=cdata, hovertemplate=hover))
+        fig.update_xaxes(title=vlabel)
+        fig.update_yaxes(autorange="reversed", title=plabel)   # depth downward
+        fig.update_layout(height=560)
         _titled(fig, f"{float_tag} — {param} profile")
         st.plotly_chart(fig, width="stretch")
 
@@ -796,9 +817,9 @@ if param:
             st.info("Salinity/temperature not available for a T-S diagram.")
         else:
             tsdf, xn, yn = tsf
-            # thin very dense clouds for responsiveness
-            if len(tsdf) > 20000:
-                tsdf = tsdf.sample(20000, random_state=0)
+            # WebGL handles big clouds; only cap the extreme cases
+            if len(tsdf) > 150000:
+                tsdf = tsdf.sample(150000, random_state=0)
             fig_ts_d = go.Figure()
             if gsw is not None and xn == "SA":
                 sa_lin = np.linspace(tsdf["sal"].min(), tsdf["sal"].max(), 60)
@@ -811,7 +832,7 @@ if param:
                     contours=dict(coloring="lines", showlabels=True),
                     line=dict(width=1), colorscale="Greys",
                     hoverinfo="skip", name="sigma0"))
-            fig_ts_d.add_trace(go.Scatter(
+            fig_ts_d.add_trace(go.Scattergl(
                 x=tsdf["sal"], y=tsdf["temp"], mode="markers",
                 marker=dict(size=3, color=tsdf["pres"], colorscale="Viridis_r",
                             reversescale=False, showscale=True,
