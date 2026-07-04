@@ -21,9 +21,10 @@ searchable from a repo just a few megabytes in size.
 ## What it does
 
 - **Find any float** — search **20,321 floats** by CTD/sensor serial number, sensor
-  model (SBE41, SBE41CP, **SBE61**, optodes, ECO, SUNA…), WMO number, or region;
-  click a match in the results table to open it. Argo has no native serial→float
-  index, so this builds one from every float's `meta.nc`.
+  model (SBE41, SBE41CP, **SBE61**, optodes, ECO, SUNA…), WMO number, or region.
+  Click a match to open it; a serial search adds a highlighted **matched on** column
+  showing exactly which sensor + serial (or float serial) triggered the hit. Argo has
+  no native serial→float index, so this builds one from every float's `meta.nc`.
 - **Float dossier** — a structured **Identity / Deployment / Project** panel: float
   serial, WMO, DAC, platform type/maker, **all sensors**, measurands on board,
   **days deployed**, last position, an approximate **region** (climate band + ocean

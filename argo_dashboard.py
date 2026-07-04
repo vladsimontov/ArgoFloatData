@@ -615,23 +615,51 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
         "Show unique floats only", value=True,
         help="On: one row per float (WMO), with how many sensors matched and their "
              "models. Off: one row per matching sensor.")
+    # When searching by serial, label what triggered each match — the sensor and its
+    # serial (or the float serial) — so the hit is visible even in the grouped view.
+    serial_hit = bool(serial_q.strip())
+    if serial_hit:
+        _sq = serial_q.strip().lower()
+        _ssn = hits["sensor_serial_no"].fillna("").astype(str)
+        _fsn = hits["float_serial_no"].fillna("").astype(str)
+        _snm = hits["sensor_model"].fillna("").astype(str)
+        _snm = _snm.where(_snm.ne(""), hits["sensor"].fillna("sensor").astype(str))
+        hits = hits.assign(matched_on=(_snm + " · " + _ssn).where(
+            _ssn.str.lower().str.contains(_sq, regex=False), "float s/n " + _fsn))
+
     if unique_only:
-        show = (hits.groupby("wmo", as_index=False)
-                .agg(float_serial_no=("float_serial_no", "first"),
-                     dac=("dac", "first"),
-                     n_sensors=("sensor", "nunique"),
-                     sensor_models=("sensor_model",
-                                    lambda s: ", ".join(
-                                        sorted(s.dropna().unique()))))
-                .reset_index(drop=True))
+        agg = dict(float_serial_no=("float_serial_no", "first"),
+                   dac=("dac", "first"),
+                   n_sensors=("sensor", "nunique"),
+                   sensor_models=("sensor_model",
+                                  lambda s: ", ".join(sorted(s.dropna().unique()))))
+        if serial_hit:
+            agg["matched_on"] = ("matched_on",
+                                 lambda s: ", ".join(sorted({x for x in s if x})))
+        show = hits.groupby("wmo", as_index=False).agg(**agg).reset_index(drop=True)
     else:
-        show = hits[["wmo", "float_serial_no", "sensor", "sensor_model",
-                     "sensor_maker", "sensor_serial_no", "dac"]].reset_index(drop=True)
+        cols = ["wmo", "float_serial_no", "sensor", "sensor_model",
+                "sensor_maker", "sensor_serial_no", "dac"]
+        if serial_hit:
+            cols.append("matched_on")
+        show = hits[cols].reset_index(drop=True)
     show.insert(1, "type", show["wmo"].astype(str).map(type_by_wmo).fillna("—"))
-    st.caption("Select a row's checkbox (far left) to open that float ↓")
-    event = st.dataframe(show, width="stretch", height=220,
+    if serial_hit:
+        show.insert(2, "matched_on", show.pop("matched_on"))   # prominent: right after type
+    cap = "Select a row's checkbox (far left) to open that float ↓"
+    if serial_hit:
+        cap += "  ·  the highlighted **matched on** column shows what your serial hit"
+    st.caption(cap)
+    _cfg = ({"matched_on": st.column_config.TextColumn(
+                "matched on", help="Which sensor serial (or the float serial) your "
+                                   "search matched.")} if serial_hit else None)
+    _disp = (show.style.set_properties(subset=["matched_on"],
+                                       **{"background-color": "#fff3cd",
+                                          "color": "#663c00"})
+             if serial_hit else show)
+    event = st.dataframe(_disp, width="stretch", height=220,
                          on_select="rerun", selection_mode="single-row",
-                         key="matches_table")
+                         key="matches_table", column_config=_cfg)
     wmos = sorted(hits["wmo"].astype(str).unique().tolist())
     # Clicking a table row opens that float by pre-filling the picker below.
     # Forget the remembered click whenever the result set changes, and act only
