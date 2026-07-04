@@ -32,7 +32,7 @@ searchable from a repo just a few megabytes in size.
 - **Interactive plots**, grouped into tabs (Overview · Trajectory · Profile & Trend · T–S):
   - **Trajectory map** — the float's drift track on an interactive **basemap**
     (pydeck + Carto tiles), with launch and latest positions marked.
-  - **Vertical profiles** — raw or `*_ADJUSTED`, QC-flag aware, colored by date.
+  - **Vertical profiles** — real-time or `*_ADJUSTED`, QC-flag aware, colored by date.
   - **Depth–time section** (Hovmöller) with a mixed-layer-depth overlay.
   - **Temperature–Salinity diagram** with σ₀ density contours.
   - **Time series at a chosen pressure** — nearest-level, colored by season, with a

@@ -653,11 +653,23 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
     _cfg = ({"matched_on": st.column_config.TextColumn(
                 "matched on", help="Which sensor serial (or the float serial) your "
                                    "search matched.")} if serial_hit else None)
-    _disp = (show.style.set_properties(subset=["matched_on"],
-                                       **{"background-color": "#fff3cd",
-                                          "color": "#663c00"})
-             if serial_hit else show)
-    event = st.dataframe(_disp, width="stretch", height=220,
+    # Highlight the currently-selected row green. Read the selection recorded before
+    # this rerun (from the checkbox click that triggered it); Styler colors are
+    # explicit, so the green holds in both light and dark mode.
+    _ms = st.session_state.get("matches_table")
+    _seld = ((_ms.get("selection") if isinstance(_ms, dict)
+              else getattr(_ms, "selection", None)) if _ms is not None else None)
+    _selrows = ((_seld.get("rows", []) if isinstance(_seld, dict)
+                 else getattr(_seld, "rows", []) or []) if _seld is not None else [])
+    _selrow0 = _selrows[0] if _selrows else None
+    _sty = show.style
+    if serial_hit:
+        _sty = _sty.set_properties(subset=["matched_on"],
+                                   **{"background-color": "#fff3cd", "color": "#663c00"})
+    if _selrow0 is not None and _selrow0 < len(show):
+        _sty = _sty.apply(lambda r: (["background-color:#c3ecd0; color:#0b6b3a"] * len(r)
+                                     if r.name == _selrow0 else [""] * len(r)), axis=1)
+    event = st.dataframe(_sty, width="stretch", height=220,
                          on_select="rerun", selection_mode="single-row",
                          key="matches_table", column_config=_cfg)
     wmos = sorted(hits["wmo"].astype(str).unique().tolist())
@@ -931,12 +943,15 @@ with tab_prof:
                           help="Includes TEOS-10 derived fields "
                                "(SIGMA0, CT, PT, SA, AOU) when computable.")
     view = pc2.radio(
-        "Data view", ["Raw", "QC-filtered", "Adjusted"], index=2, horizontal=True,
-        help="**Raw** — as reported (no QC, no calibration correction). "
-             "**QC-filtered** — raw, keeping only good QC flags {1,2,5,8}. "
-             "**Adjusted** — delayed-mode/adjusted, science-ready values (QC-filtered).")
-    adjusted = view == "Adjusted"
-    apply_qc = view in ("QC-filtered", "Adjusted")
+        "Data view", ["Real-time (R)", "QC-filtered", "Adjusted (A/D)"],
+        index=2, horizontal=True,
+        help="**Real-time (R)** — the reported value, no adjustment (shown whatever the "
+             "parameter's data mode). "
+             "**QC-filtered** — the reported value, keeping only good QC flags {1,2,5,8}. "
+             "**Adjusted (A/D)** — delayed-mode/adjusted, science-ready values (QC-filtered). "
+             "The parameter's actual data mode (R/A/D) is shown just below.")
+    adjusted = view.startswith("Adjusted")
+    apply_qc = view.startswith(("QC", "Adjusted"))
 
     if param:
         df, pcol, vcol = param_long_frame(ds, param, adjusted, apply_qc)
@@ -949,7 +964,8 @@ with tab_prof:
         st.caption(f"Data mode for {param}: {data_mode_for(ds, param)}")
         if df.empty:
             st.warning("No finite points after selection. Try a different **Data view** "
-                       "— this parameter may only exist in raw form for this float.")
+                       "— this parameter may only exist as real-time values (no "
+                       "QC-passing or adjusted values) for this float.")
         else:
             vlabel, plabel = _axis_label(vcol), _axis_label(pcol)
             if "time" in df.columns:
