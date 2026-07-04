@@ -517,6 +517,16 @@ def search():
 hits = search()
 
 st.subheader("Matches")
+
+# compact float-type label per WMO (BGC / Core, flagged Deep) for the table
+def _float_type(dk, deep):
+    base = "BGC" if dk == "bgc" else "Core" if dk == "core" else "—"
+    return f"{base} · Deep" if deep else base
+type_by_wmo = {}
+if {"data_kind", "is_deep"}.issubset(floats.columns):
+    type_by_wmo = {str(w): _float_type(dk, bool(d)) for w, dk, d in
+                   zip(floats["wmo"], floats["data_kind"], floats["is_deep"])}
+
 if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
     unique_only = st.toggle(
         "Show unique floats only", value=False,
@@ -534,6 +544,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
     else:
         show = hits[["wmo", "float_serial_no", "sensor", "sensor_model",
                      "sensor_maker", "sensor_serial_no", "dac"]].reset_index(drop=True)
+    show.insert(1, "type", show["wmo"].astype(str).map(type_by_wmo).fillna("—"))
     st.dataframe(show, width="stretch", height=220)
     wmos = sorted(hits["wmo"].astype(str).unique().tolist())
 else:
