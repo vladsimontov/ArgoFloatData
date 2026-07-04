@@ -305,6 +305,71 @@ def data_mode_for(ds, param):
     return "unknown"
 
 
+def scientific_calib_rows(ds):
+    """Delayed-mode SCIENTIFIC_CALIB per parameter (from prof/Sprof)."""
+    rows = []
+    if not {"SCIENTIFIC_CALIB_COEFFICIENT", "STATION_PARAMETERS"}.issubset(ds):
+        return rows
+    try:
+        names = _decode_cells(ds["STATION_PARAMETERS"].values)          # (NPROF,NPARAM)
+        co = _decode_cells(ds["SCIENTIFIC_CALIB_COEFFICIENT"].values)   # (NPROF,NCAL,NPARAM)
+        eq = _decode_cells(ds["SCIENTIFIC_CALIB_EQUATION"].values)
+        cm = _decode_cells(ds["SCIENTIFIC_CALIB_COMMENT"].values)
+        dt = (_decode_cells(ds["SCIENTIFIC_CALIB_DATE"].values)
+              if "SCIENTIFIC_CALIB_DATE" in ds else None)
+        if names.ndim != 2 or co.ndim != 3:
+            return rows
+        nprof, ncal, npar = co.shape
+        p = nprof - 1                                   # most-recent profile
+        seen = set()
+        for j in range(npar):
+            pn = names[min(p, names.shape[0] - 1), j].strip() if names.shape[1] > j else ""
+            if not pn:
+                continue
+            for k in range(ncal):
+                c, e, m = co[p, k, j].strip(), eq[p, k, j].strip(), cm[p, k, j].strip()
+                if not (c or e or m):
+                    continue
+                key = (pn, c, e)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append({"measurand": pn, "source": "delayed-mode (DMQC)",
+                             "coefficient": c, "equation": e, "comment": m,
+                             "date": (dt[p, k, j].strip() if dt is not None else "")})
+    except Exception:
+        pass
+    return rows
+
+
+def predeployment_calib_rows(meta_ds):
+    """Factory/sensor PREDEPLOYMENT_CALIB per parameter (from meta.nc)."""
+    rows = []
+    try:
+        def dec(n):
+            return (np.atleast_1d(_decode_cells(meta_ds[n].values)).ravel()
+                    if n in meta_ds else None)
+        co = dec("PREDEPLOYMENT_CALIB_COEFFICIENT")
+        if co is None:
+            return rows
+        eq = dec("PREDEPLOYMENT_CALIB_EQUATION")
+        cm = dec("PREDEPLOYMENT_CALIB_COMMENT")
+        pn = dec("PARAMETER")
+        n = len(co)
+        for i in range(n):
+            c = co[i].strip()
+            e = eq[i].strip() if eq is not None and i < len(eq) else ""
+            m = cm[i].strip() if cm is not None and i < len(cm) else ""
+            name = pn[i].strip() if pn is not None and i < len(pn) else ""
+            if not (c or e or m):
+                continue
+            rows.append({"measurand": name, "source": "factory (predeployment)",
+                         "coefficient": c, "equation": e, "comment": m, "date": ""})
+    except Exception:
+        pass
+    return rows
+
+
 def section_grid(ds, param, adjusted, apply_qc, n_p=120):
     """Interpolate each profile onto a common pressure grid -> (pgrid, times, Z)."""
     df, pcol, vcol = param_long_frame(ds, param, adjusted, apply_qc)
@@ -693,6 +758,112 @@ def _titled(fig, text):
     return fig
 
 
+# ---- calibration coefficients for every measurand (collapsible) ----
+with st.expander("🔬 Calibration coefficients (all measurands)", expanded=False):
+    st.caption("How each parameter is calibrated — factory / pre-deployment sensor "
+               "coefficients (from meta.nc) that convert raw counts to physical units, "
+               "and delayed-mode (DMQC) adjustments (from the profile file). Blank "
+               "where a float doesn't report them.")
+    calib_rows = list(scientific_calib_rows(ds))
+    _dac = frow.get("dac") if frow is not None else None
+    if _dac:
+        meta_rel = f"dac/{_dac}/{sel_wmo}/{sel_wmo}_meta.nc"
+        if fetch_from_gdac(meta_rel):
+            try:
+                _mds = xr.open_dataset(os.path.join(ROOT, meta_rel),
+                                       mask_and_scale=False, decode_times=False)
+                calib_rows = predeployment_calib_rows(_mds) + calib_rows
+                _mds.close()
+            except Exception:
+                pass
+    if calib_rows:
+        cdf = pd.DataFrame(calib_rows)[
+            ["measurand", "source", "coefficient", "equation", "comment", "date"]]
+        st.dataframe(cdf, width="stretch",
+                     height=min(80 + 28 * len(cdf), 460))
+    else:
+        st.info("No calibration coefficients are reported in this float's files.")
+
+# ---- raw sensor signals (per-cycle B-file) — e.g. CDOM counts, pre-conversion ----
+if frow is not None and frow.get("data_kind") == "bgc":
+    st.markdown("---")
+    st.subheader("Raw sensor signals (B-file)")
+    st.caption("Intermediate / raw signals — phase, counts, raw fluorescence (e.g. "
+               "CDOM counts as FLUORESCENCE_CDOM, *before* conversion to ppb) — that "
+               "aren't in the synthetic Sprof. Fetched per cycle from the GDAC B-files.")
+    if "CYCLE_NUMBER" not in ds:
+        st.info("No cycle information for this float.")
+    elif st.toggle("Load raw signals for a cycle (fetches a B-file from the GDAC)",
+                   value=False):
+        cyc_vals = sorted({int(c) for c in np.asarray(ds["CYCLE_NUMBER"].values).ravel()
+                           if np.isfinite(c)})
+        rc1, rc2 = st.columns(2)
+        csel = rc1.selectbox("Cycle", cyc_vals, index=len(cyc_vals) - 1)
+        braw = None
+        for pref in ("BR", "BD"):                     # realtime then delayed
+            brel = f"dac/{_dac}/{sel_wmo}/profiles/{pref}{sel_wmo}_{csel:03d}.nc"
+            if fetch_from_gdac(brel, retries=1):
+                braw = brel
+                break
+        if not braw:
+            st.warning(f"No B-file found for cycle {csel} — this float may not have "
+                       "raw BGC B-data for that cycle.")
+        else:
+            # default masking so fill values (99999) become NaN, not fake data
+            bds = xr.open_dataset(os.path.join(ROOT, braw), decode_times=False)
+            rawp = [v for v in bds.data_vars if bds[v].dims == ("N_PROF", "N_LEVELS")
+                    and not v.endswith(("_QC", "_ADJUSTED", "_ADJUSTED_QC",
+                                        "_ADJUSTED_ERROR")) and v != "PRES"]
+            if not rawp:
+                st.info("No raw parameters found in this B-file.")
+            else:
+                # default to raw counts + calibrated value so you can see BOTH
+                dflt = [p for p in rawp if p in ("FLUORESCENCE_CDOM", "CDOM")]
+                sel = rc2.multiselect(
+                    "Parameter(s) — pick a raw signal + its calibrated form to compare",
+                    rawp, default=dflt or rawp[:1])
+                pres = np.asarray(bds["PRES"].values).ravel().astype("float64")
+                colors = ["#0a6ebd", "#c44e52", "#0ea5a5", "#dd8452"]
+                figr = go.Figure()
+                axes, any_finite, n_pts = {}, False, 0
+                for i, p in enumerate(sel[:3]):        # each on its own x-axis
+                    val = np.asarray(bds[p].values).ravel().astype("float64")
+                    m = np.isfinite(pres) & np.isfinite(val)
+                    if not m.any():
+                        continue
+                    any_finite = True
+                    n_pts += int(m.sum())
+                    c = colors[i % len(colors)]
+                    xa = "x" if i == 0 else f"x{i + 1}"
+                    u = bds[p].attrs.get("units", "")
+                    figr.add_trace(go.Scattergl(
+                        x=val[m], y=pres[m], name=p, mode="markers",
+                        marker=dict(size=5, color=c), xaxis=xa))
+                    title = f"{p} [{u}]" if u else p
+                    if i == 0:
+                        axes["xaxis"] = dict(title=dict(text=title, font=dict(color=c)),
+                                             tickfont=dict(color=c))
+                    else:
+                        axes[f"xaxis{i + 1}"] = dict(
+                            title=dict(text=title, font=dict(color=c)),
+                            tickfont=dict(color=c), overlaying="x", side="top",
+                            position=1.0 - 0.07 * (i - 1))
+                if not sel:
+                    st.info("Pick at least one parameter.")
+                elif not any_finite:
+                    st.warning(f"Selected parameters have no finite values in cycle {csel}.")
+                else:
+                    _titled(figr, f"Float {sel_wmo} cycle {csel} — raw B-file")
+                    figr.update_yaxes(autorange="reversed", title="PRES [decibar]")
+                    figr.update_layout(height=560, showlegend=False,
+                                       margin=dict(t=100), **axes)
+                    st.plotly_chart(figr, width="stretch")
+                    st.caption(f"From {os.path.basename(braw)} · {n_pts} points · each "
+                               "parameter on its own colour-matched axis (raw counts on "
+                               "the bottom, calibrated on top) so they're comparable vs "
+                               "depth. See the calibration panel above for the conversion.")
+            bds.close()
+
 # trajectory map (plotly, no token needed)
 lat = ds["LATITUDE"].values if "LATITUDE" in ds else None
 lon = ds["LONGITUDE"].values if "LONGITUDE" in ds else None
@@ -713,7 +884,7 @@ if lat is not None and lon is not None and np.isfinite(lat).any():
     st.plotly_chart(fig_map, width="stretch")
 
 # controls
-cc1, cc2, cc3 = st.columns([2, 1, 1])
+cc1, cc2 = st.columns([2, 2])
 plottable = [p for p in measurands if p in ds or f"{p}_ADJUSTED" in ds]
 derived_here = [d for d in DERIVED_2D if d in ds and d not in plottable]
 if derived_here:
@@ -736,10 +907,13 @@ param = cc1.selectbox("Parameter to plot", param_opts,
                       index=_default_param_index(param_opts),
                       help="Includes TEOS-10 derived fields "
                            "(SIGMA0, CT, PT, SA, AOU) when computable.")
-adjusted = cc2.toggle("Use ADJUSTED", value=True,
-                      help="Delayed-mode/adjusted values are science-ready; "
-                           "raw are not calibration-corrected.")
-apply_qc = cc3.toggle("QC filter (1,2,5,8)", value=True)
+view = cc2.radio(
+    "Data view", ["Raw", "QC-filtered", "Adjusted"], index=2, horizontal=True,
+    help="**Raw** — as reported (no QC, no calibration correction). "
+         "**QC-filtered** — raw, keeping only good QC flags {1,2,5,8}. "
+         "**Adjusted** — delayed-mode/adjusted, science-ready values (QC-filtered).")
+adjusted = view == "Adjusted"
+apply_qc = view in ("QC-filtered", "Adjusted")
 
 if param:
     st.caption(f"Data mode for {param}: {data_mode_for(ds, param)}")
