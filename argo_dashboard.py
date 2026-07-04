@@ -441,12 +441,12 @@ st.caption("Float data is fetched on demand from the Argo GDAC when you open a f
            "is refreshed periodically; pin a DOI snapshot for publications.")
 
 # ---- acknowledgements · data source · license (always visible) ----
-with st.expander("🙏 Acknowledgements · data source · license", expanded=False):
+with st.expander("Acknowledgements | Data Source | License", expanded=False):
     st.markdown("""
 **Thank you to Argo — and to the people and nations who make it possible.**
 
 Every profile in this tool exists because of the **International Argo Program** and
-the ~30 nations — their governments, agencies, engineers, and scientists — who fund,
+the ~30 nations: their governments, agencies, engineers, and scientists who fund,
 build, deploy, recover, quality-control, and then *freely* share these floats with
 the world. Sustained ocean observing on this scale is an act of international
 generosity, and this tool is only a small window onto their work. **Thank you.** 🌊
@@ -464,7 +464,7 @@ Argo (2026). *Argo float data and metadata from Global Data Assembly Centre
 Australia (CSIRO / BOM / IMOS), Canada (DFO / MEDS), China (SIO / CSIO), France
 (Ifremer / Coriolis, CNES), Germany (BSH / GEOMAR), India (INCOIS / MoES),
 Italy (OGS), Japan (JAMSTEC / JMA), South Korea (KMA / KIOST), the United Kingdom
-(Met Office / BODC), the United States (NOAA), **Euro-Argo ERIC**, and every other
+(Met Office / BODC), the United States (NOAA / SIO), **Euro-Argo ERIC**, and every other
 nation and government contributing to Argo. The full float array is a shared gift.
 
 **License** — Argo data are freely available under
@@ -479,8 +479,7 @@ community tool — not affiliated with or endorsed by the Argo Program.*
     st.markdown(
         f"**🐛 Found a bug, or have a request?** "
         f"[Open an issue]({NEW_ISSUE_URL}) · [browse issues]({ISSUES_URL}). "
-        "Feedback on the science, the QC handling, or a float that won't load is "
-        "all welcome.")
+        "All Feedback and Feature requests are welcome.")
 
 # ---- sidebar: search ----
 st.sidebar.header("Find a float")
@@ -496,7 +495,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption(
     f"🐛 [Report a bug / request a feature]({NEW_ISSUE_URL})")
 st.sidebar.caption(
-    "🌊 Data: **International Argo Program** & its member nations — "
+    "🌊🌊🌊 Data: **International Argo Program** & its member nations — "
     "freely shared under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). "
     "[doi.org/10.17882/42182](https://doi.org/10.17882/42182). "
     "With thanks. See **Acknowledgements** up top.")
@@ -698,7 +697,22 @@ plottable = [p for p in measurands if p in ds or f"{p}_ADJUSTED" in ds]
 derived_here = [d for d in DERIVED_2D if d in ds and d not in plottable]
 if derived_here:
     plottable = plottable + derived_here     # TEOS-10 fields at the end
-param = cc1.selectbox("Parameter to plot", plottable or measurands,
+param_opts = plottable or measurands
+
+
+def _default_param_index(opts):
+    # default to TEMP (a real, universal plot) instead of PRES/MTIME
+    for pref in ("TEMP", "PSAL", "CT", "PT", "DOXY"):
+        if pref in opts:
+            return opts.index(pref)
+    for i, o in enumerate(opts):
+        if o not in ("PRES", "MTIME"):
+            return i
+    return 0
+
+
+param = cc1.selectbox("Parameter to plot", param_opts,
+                      index=_default_param_index(param_opts),
                       help="Includes TEOS-10 derived fields "
                            "(SIGMA0, CT, PT, SA, AOU) when computable.")
 adjusted = cc2.toggle("Use ADJUSTED", value=True,
