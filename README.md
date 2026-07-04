@@ -20,15 +20,17 @@ searchable from a repo just a few megabytes in size.
 
 ## What it does
 
-- **Find any float** — search **20,320 floats** by CTD/sensor serial number, sensor
-  model (SBE41, SBE41CP, **SBE61**, optodes, ECO, SUNA…), WMO number, or region.
-  Argo has no native serial→float index, so this builds one from every float's
-  `meta.nc`.
-- **Float dossier** — float serial, WMO, DAC, platform type/maker, **all sensors**,
-  measurands on board, **days deployed**, last position, an approximate **region**
-  (climate band + ocean basin), and which data file backs it (BGC vs core).
-- **Interactive plots** (Plotly, WebGL-accelerated):
-  - **Trajectory map** of the float's cycles.
+- **Find any float** — search **20,321 floats** by CTD/sensor serial number, sensor
+  model (SBE41, SBE41CP, **SBE61**, optodes, ECO, SUNA…), WMO number, or region;
+  click a match in the results table to open it. Argo has no native serial→float
+  index, so this builds one from every float's `meta.nc`.
+- **Float dossier** — a structured **Identity / Deployment / Project** panel: float
+  serial, WMO, DAC, platform type/maker, **all sensors**, measurands on board,
+  **days deployed**, last position, an approximate **region** (climate band + ocean
+  basin), and which data file backs it (BGC vs core).
+- **Interactive plots**, grouped into tabs (Overview · Trajectory · Profile & Trend · T–S):
+  - **Trajectory map** — the float's drift track on an interactive **basemap**
+    (pydeck + Carto tiles), with launch and latest positions marked.
   - **Vertical profiles** — raw or `*_ADJUSTED`, QC-flag aware, colored by date.
   - **Depth–time section** (Hovmöller) with a mixed-layer-depth overlay.
   - **Temperature–Salinity diagram** with σ₀ density contours.

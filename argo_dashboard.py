@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+import pydeck as pdk
 import xarray as xr
 import plotly.express as px
 import plotly.graph_objects as go
@@ -65,6 +66,11 @@ st.markdown("""
   .block-container {padding-top: 2rem;}
   [data-testid="stMetricValue"] {font-size: 1.1rem;}
   .stDataFrame {font-size: 0.9rem;}
+  /* larger, bolder tab labels so the active view stays easy to track */
+  .stTabs [data-baseweb="tab-list"] {gap: 1.5rem;}
+  .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] {font-size: 1.15rem;}
+  .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] p {
+      font-size: 1.15rem; font-weight: 600;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -622,8 +628,24 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
         show = hits[["wmo", "float_serial_no", "sensor", "sensor_model",
                      "sensor_maker", "sensor_serial_no", "dac"]].reset_index(drop=True)
     show.insert(1, "type", show["wmo"].astype(str).map(type_by_wmo).fillna("—"))
-    st.dataframe(show, width="stretch", height=220)
+    st.caption("Select a row's checkbox (far left) to open that float ↓")
+    event = st.dataframe(show, width="stretch", height=220,
+                         on_select="rerun", selection_mode="single-row",
+                         key="matches_table")
     wmos = sorted(hits["wmo"].astype(str).unique().tolist())
+    # Clicking a table row opens that float by pre-filling the picker below.
+    # Forget the remembered click whenever the result set changes, and act only
+    # on a *new* row so the dropdown can still override a row selection.
+    sig = (serial_q, wmo_q, model_q, unique_only)
+    if st.session_state.get("_match_sig") != sig:
+        st.session_state["_match_sig"] = sig
+        st.session_state.pop("_last_row", None)
+    _sel = getattr(event, "selection", None)
+    _rows = list(_sel.rows) if _sel and getattr(_sel, "rows", None) else []
+    _cur = _rows[0] if _rows else None
+    if _cur is not None and _cur < len(show) and _cur != st.session_state.get("_last_row"):
+        st.session_state["_last_row"] = _cur
+        st.session_state["wmo_pick"] = str(show.iloc[_cur]["wmo"])
 else:
     st.info("Enter a serial number, sensor model, or WMO in the sidebar.")
     wmos = []
@@ -631,94 +653,35 @@ else:
 if not wmos:
     st.stop()
 
-sel_wmo = st.selectbox("Select a float (WMO) to inspect", wmos)
+# keep the picker in sync with the table; drop a stale pick from a prior search
+if st.session_state.get("wmo_pick") not in wmos:
+    st.session_state.pop("wmo_pick", None)
+sel_wmo = st.selectbox("Select a float (WMO) to inspect", wmos, key="wmo_pick",
+                       help="Or click a row in the Matches table above.")
 
-# ---- float dossier ----
+# ---- resolve the selected float and load its data ----
 frow = floats[floats["wmo"].astype(str) == str(sel_wmo)]
 frow = frow.iloc[0] if len(frow) else None
 fsens = sensors[sensors["wmo"].astype(str) == str(sel_wmo)]
 
-# load profile data early (cached) so the dossier can fall back to it when the
-# sync index lacks last_date / last position for this float
 sprof_rel = frow.get("sprof_path") if frow is not None else None
 has_local = bool(sprof_rel) and os.path.exists(os.path.join(ROOT, str(sprof_rel)))
 ds = load_sprof(os.path.join(ROOT, str(sprof_rel))) if has_local else None
 
-st.markdown("---")
-left, right = st.columns([1, 1])
-with left:
-    st.subheader(f"Float {sel_wmo}")
-    if frow is not None:
-        launch = parse_argo_date(frow.get("launch_date"))
-        last = parse_argo_date(frow.get("last_date"))
-        llat, llon = frow.get("last_lat"), frow.get("last_lon")
-        # fall back to the profile file when the sync index lacks these
-        if ds is not None:
-            if pd.isna(last) and "JULD" in ds:
-                jmax = pd.Series(ds["JULD"].values).max()
-                last = pd.Timestamp(jmax) if pd.notna(jmax) else last
-            if (pd.isna(llat) or pd.isna(llon)) and "LATITUDE" in ds:
-                la, lo = ds["LATITUDE"].values, ds["LONGITUDE"].values
-                ok = np.isfinite(la) & np.isfinite(lo)
-                if ok.any():
-                    llat, llon = float(la[ok][-1]), float(lo[ok][-1])
-        if pd.notna(launch) and pd.notna(last) and last >= launch:
-            dd = (last - launch).days
-            deployed = f"{dd:,} days (~{dd / 365.25:.1f} yr), last profile {last:%Y-%m-%d}"
-        else:
-            deployed = "—"
-        if pd.notna(llat) and pd.notna(llon):
-            lon_n = ((float(llon) + 180) % 360) - 180
-            position = (f"{abs(float(llat)):.2f}°{'N' if llat >= 0 else 'S'}, "
-                        f"{abs(lon_n):.2f}°{'E' if lon_n >= 0 else 'W'}")
-            region = f"{climate_band(float(llat))} · {ocean_basin(float(llat), float(llon))}"
-        else:
-            position, region = "—", "—"
-        _kind = frow.get("data_kind")
-        data_file = ({"core": "core (prof.nc — physical T/S)",
-                      "bgc": "BGC (Sprof.nc — synthetic)"}.get(_kind)
-                     if pd.notna(_kind) else "—")
-        st.write({
-            "Float serial no.": frow.get("float_serial_no"),
-            "WMO": frow.get("wmo"),
-            "DAC": frow.get("dac"),
-            "Data file": data_file,
-            "Platform type": frow.get("platform_type"),
-            "Platform maker": frow.get("platform_maker"),
-            "WMO inst type": frow.get("wmo_inst_type"),
-            "Launch date": f"{launch:%Y-%m-%d}" if pd.notna(launch)
-                           else frow.get("launch_date"),
-            "Days deployed": deployed,
-            "Last position": position,
-            "Region (approx.)": region,
-            "Project / PI": f"{frow.get('project_name')} / {frow.get('pi_name')}",
-        })
-with right:
-    st.subheader("Sensors on this float")
-    st.dataframe(
-        fsens[["sensor", "sensor_model", "sensor_maker", "sensor_serial_no"]]
-        .reset_index(drop=True),
-        width="stretch", height=240)
+# measurands from the crosswalk / meta
 
-# measurands
-st.subheader("Measurands on board")
+
 def _param_str(row, key):
     # NaN is truthy in Python, so guard with notna before using as a string.
     v = row.get(key) if row is not None else None
     return str(v).strip() if pd.notna(v) else ""
+
+
 params_str = _param_str(frow, "parameters") or _param_str(frow, "parameters_meta")
 measurands = [p for p in params_str.split() if p]
-if measurands:
-    st.write(", ".join(measurands))
-else:
-    st.write("_(not listed in index/meta; will read from data file if available)_")
 
-# ---- data: local, else fetch from the GDAC on demand (cached) ----
-st.markdown("---")
-st.subheader("Location & plots")
-
+# fetch the profile file on demand from the GDAC if not cached locally
 if not has_local:
-    # the expected file for this float, from the metadata index
     rel = frow.get("expected_rel") if frow is not None else None
     if not (isinstance(rel, str) and rel):
         suffix = "_Sprof.nc" if str(frow.get("data_kind")) == "bgc" else "_prof.nc"
@@ -735,15 +698,14 @@ if not has_local:
     has_local = True
     ds = load_sprof(os.path.join(ROOT, rel))
 
-# refine measurands from the actual file if meta was empty
+# refine measurands from the file if the meta list was empty
 if not measurands:
     measurands = [v for v in ds.data_vars
                   if ds[v].dims == ("N_PROF", "N_LEVELS")
                   and not v.endswith(("_QC", "_ADJUSTED", "_ADJUSTED_QC",
                                       "_ADJUSTED_ERROR"))]
 
-# WMO tag stamped on every plot: makes clear which float a chart is for and that
-# it isn't stale (latest-profile date + cycle count are freshness signals)
+# WMO tag stamped on every chart (which float + how fresh)
 _last_juld = pd.Series(ds["JULD"].values).max() if "JULD" in ds else pd.NaT
 _ncyc = int(ds.sizes.get("N_PROF", 0))
 float_tag = f"Float {sel_wmo}"
@@ -755,146 +717,255 @@ if _ncyc:
 
 def _titled(fig, text):
     fig.update_layout(title=dict(text=text, x=0.0, xanchor="left",
-                                 font=dict(size=13)),
-                      margin=dict(t=48))
+                                 font=dict(size=13)), margin=dict(t=48))
     return fig
 
 
-# ---- calibration coefficients for every measurand (collapsible) ----
-with st.expander("🔬 Calibration coefficients (all measurands)", expanded=False):
-    st.caption("How each parameter is calibrated — factory / pre-deployment sensor "
-               "coefficients (from meta.nc) that convert raw counts to physical units, "
-               "and delayed-mode (DMQC) adjustments (from the profile file). Blank "
-               "where a float doesn't report them.")
-    calib_rows = list(scientific_calib_rows(ds))
-    _dac = frow.get("dac") if frow is not None else None
-    if _dac:
-        meta_rel = f"dac/{_dac}/{sel_wmo}/{sel_wmo}_meta.nc"
-        if fetch_from_gdac(meta_rel):
-            try:
-                _mds = xr.open_dataset(os.path.join(ROOT, meta_rel),
-                                       mask_and_scale=False, decode_times=False)
-                calib_rows = predeployment_calib_rows(_mds) + calib_rows
-                _mds.close()
-            except Exception:
-                pass
-    if calib_rows:
-        cdf = pd.DataFrame(calib_rows)[
-            ["measurand", "source", "coefficient", "equation", "comment", "date"]]
-        st.dataframe(cdf, width="stretch",
-                     height=min(80 + 28 * len(cdf), 460))
-    else:
-        st.info("No calibration coefficients are reported in this float's files.")
-
-# trajectory map (plotly, no token needed)
-lat = ds["LATITUDE"].values if "LATITUDE" in ds else None
-lon = ds["LONGITUDE"].values if "LONGITUDE" in ds else None
-if lat is not None and lon is not None and np.isfinite(lat).any():
-    traj = pd.DataFrame({"lat": lat, "lon": lon,
-                         "cycle": ds["CYCLE_NUMBER"].values
-                         if "CYCLE_NUMBER" in ds else np.arange(len(lat))})
-    traj = traj.dropna(subset=["lat", "lon"])
-    fig_map = px.line_geo(traj, lat="lat", lon="lon")
-    fig_map.add_trace(go.Scattergeo(
-        lat=traj["lat"], lon=traj["lon"], mode="markers",
-        marker=dict(size=5), text=traj["cycle"], name="profiles"))
-    fig_map.update_geos(fitbounds="locations", showland=True,
-                        landcolor="rgb(240,240,235)", showcountries=True)
-    fig_map.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=0),
-                          showlegend=False)
-    _titled(fig_map, f"{float_tag} — trajectory")
-    st.plotly_chart(fig_map, width="stretch")
-
-# controls
-cc1, cc2 = st.columns([2, 2])
-plottable = [p for p in measurands if p in ds or f"{p}_ADJUSTED" in ds]
-derived_here = [d for d in DERIVED_2D if d in ds and d not in plottable]
-if derived_here:
-    plottable = plottable + derived_here     # TEOS-10 fields at the end
-param_opts = plottable or measurands
+def _axis_label(var):
+    units = ds[var].attrs.get("units") if var in ds else None
+    return f"{var} [{units}]" if units else var
 
 
-def _default_param_index(opts):
-    # default to TEMP (a real, universal plot) instead of PRES/MTIME
-    for pref in ("TEMP", "PSAL", "CT", "PT", "DOXY"):
-        if pref in opts:
-            return opts.index(pref)
-    for i, o in enumerate(opts):
-        if o not in ("PRES", "MTIME"):
-            return i
-    return 0
+# ---- per-float views as tabs (sidebar search + results table stay global) ----
+tab_over, tab_traj, tab_prof, tab_ts = st.tabs(
+    ["Overview", "Trajectory", "Profile & Trend", "T–S"])
 
-
-param = cc1.selectbox("Parameter to plot", param_opts,
-                      index=_default_param_index(param_opts),
-                      help="Includes TEOS-10 derived fields "
-                           "(SIGMA0, CT, PT, SA, AOU) when computable.")
-view = cc2.radio(
-    "Data view", ["Raw", "QC-filtered", "Adjusted"], index=2, horizontal=True,
-    help="**Raw** — as reported (no QC, no calibration correction). "
-         "**QC-filtered** — raw, keeping only good QC flags {1,2,5,8}. "
-         "**Adjusted** — delayed-mode/adjusted, science-ready values (QC-filtered).")
-adjusted = view == "Adjusted"
-apply_qc = view in ("QC-filtered", "Adjusted")
-
-if param:
-    st.caption(f"Data mode for {param}: {data_mode_for(ds, param)}")
-    df, pcol, vcol = param_long_frame(ds, param, adjusted, apply_qc)
-    if df.empty:
-        st.warning("No finite points after selection. Try toggling ADJUSTED/QC — "
-                   "this parameter may only exist in raw form for this float.")
-    else:
-        def _axis_label(var):
-            units = ds[var].attrs.get("units") if var in ds else None
-            return f"{var} [{units}]" if units else var
-        vlabel, plabel = _axis_label(vcol), _axis_label(pcol)
-        # WebGL (Scattergl) renders 100k+ points instantly and stays smooth on
-        # zoom/pan; color by time as a compact colorbar, not a 200+ entry legend.
-        if "time" in df.columns:
-            _t = pd.to_datetime(df["time"])
-            cvals = _t.astype("int64").astype("float64")
-            cvals[_t.isna().to_numpy()] = np.nan
-            _lo, _hi = np.nanmin(cvals), np.nanmax(cvals)
-            _tv = list(np.linspace(_lo, _hi, 5)) if np.isfinite(_lo) else []
-            cbar = dict(title="date", tickvals=_tv,
-                        ticktext=[pd.Timestamp(int(t)).strftime("%Y-%m-%d")
-                                  for t in _tv])
-            cdata = _t.dt.strftime("%Y-%m-%d").to_numpy()
-            hover = (f"{vcol}=%{{x:.4g}}<br>{pcol}=%{{y:.1f}} dbar"
-                     "<br>%{customdata}<extra></extra>")
+# ===================== Overview: metadata + sensors + calibration =====================
+with tab_over:
+    st.subheader(f"Float {sel_wmo}")
+    if frow is not None:
+        launch = parse_argo_date(frow.get("launch_date"))
+        last = parse_argo_date(frow.get("last_date"))
+        llat, llon = frow.get("last_lat"), frow.get("last_lon")
+        if pd.isna(last) and "JULD" in ds:
+            jmax = pd.Series(ds["JULD"].values).max()
+            last = pd.Timestamp(jmax) if pd.notna(jmax) else last
+        if (pd.isna(llat) or pd.isna(llon)) and "LATITUDE" in ds:
+            la, lo = ds["LATITUDE"].values, ds["LONGITUDE"].values
+            ok = np.isfinite(la) & np.isfinite(lo)
+            if ok.any():
+                llat, llon = float(la[ok][-1]), float(lo[ok][-1])
+        deployed = "—"
+        if pd.notna(launch) and pd.notna(last) and last >= launch:
+            dd = (last - launch).days
+            deployed = f"{dd:,} days (~{dd / 365.25:.1f} yr)"
+        last_profile = f"{last:%Y-%m-%d}" if pd.notna(last) else "—"
+        if pd.notna(llat) and pd.notna(llon):
+            lon_n = ((float(llon) + 180) % 360) - 180
+            position = (f"{abs(float(llat)):.2f}°{'N' if llat >= 0 else 'S'}, "
+                        f"{abs(lon_n):.2f}°{'E' if lon_n >= 0 else 'W'}")
+            region = (f"{climate_band(float(llat))} · "
+                      f"{ocean_basin(float(llat), float(llon))}")
         else:
-            cvals = df["cycle"].to_numpy()
-            cdata = cvals
-            cbar = dict(title="cycle")
-            hover = (f"{vcol}=%{{x:.4g}}<br>{pcol}=%{{y:.1f}} dbar"
-                     "<br>cycle %{customdata}<extra></extra>")
-        fig = go.Figure(go.Scattergl(
-            x=df["value"], y=df["pres"], mode="markers",
-            marker=dict(size=4, color=cvals, colorscale="Viridis", colorbar=cbar),
-            customdata=cdata, hovertemplate=hover))
-        fig.update_xaxes(title=vlabel)
-        fig.update_yaxes(autorange="reversed", title=plabel)   # depth downward
-        fig.update_layout(height=560)
-        _titled(fig, f"{float_tag} — {param} profile")
-        st.plotly_chart(fig, width="stretch")
+            position, region = "—", "—"
+        _kind = frow.get("data_kind")
+        data_file = ({"core": "core (prof.nc — physical T/S)",
+                      "bgc": "BGC (Sprof.nc — synthetic)"}.get(_kind)
+                     if pd.notna(_kind) else "—")
 
-        # ---- downloads ----
-        d1, d2 = st.columns(2)
-        d1.download_button("Download this parameter (CSV)",
-                           df.to_csv(index=False).encode(),
-                           file_name=f"{sel_wmo}_{param}.csv", mime="text/csv")
+        def _kv(pairs):
+            def _v(x):
+                s = "" if x is None else str(x).strip()
+                return s if s and s.lower() != "nan" else "—"
+            return "\n".join(f"**{k}:** {_v(v)}  " for k, v in pairs)
 
-        # serve the pristine original file straight from disk (robust for both
-        # Sprof and core prof.nc; avoids to_netcdf round-trip encoding issues)
-        _orig_path = os.path.join(ROOT, str(sprof_rel))
-        with open(_orig_path, "rb") as _f:
-            _orig_bytes = _f.read()
-        d2.download_button("Download full float (NetCDF)",
-                           _orig_bytes,
-                           file_name=os.path.basename(_orig_path),
-                           mime="application/x-netcdf")
+        oc1, oc2, oc3 = st.columns(3)
+        with oc1:
+            st.markdown("**Identity**")
+            st.markdown(_kv([
+                ("WMO", frow.get("wmo")),
+                ("Float serial no.", frow.get("float_serial_no")),
+                ("Platform type", frow.get("platform_type")),
+                ("Platform maker", frow.get("platform_maker")),
+                ("WMO inst type", frow.get("wmo_inst_type")),
+                ("Data file", data_file),
+                ("DAC", frow.get("dac")),
+            ]))
+        with oc2:
+            st.markdown("**Deployment**")
+            st.markdown(_kv([
+                ("Launch date", f"{launch:%Y-%m-%d}" if pd.notna(launch)
+                 else frow.get("launch_date")),
+                ("Days deployed", deployed),
+                ("Last profile", last_profile),
+                ("Last position", position),
+                ("Region (approx.)", region),
+            ]))
+        with oc3:
+            st.markdown("**Project**")
+            st.markdown(_kv([
+                ("Project", frow.get("project_name")),
+                ("PI", frow.get("pi_name")),
+            ]))
 
-        # ---- depth-time section (Hovmoller) ----
+    st.markdown("---")
+    sc1, sc2 = st.columns([3, 2])
+    with sc1:
+        st.markdown("**Sensors on this float**")
+        st.dataframe(
+            fsens[["sensor", "sensor_model", "sensor_maker", "sensor_serial_no"]]
+            .reset_index(drop=True), width="stretch", height=260)
+    with sc2:
+        st.markdown("**Measurands on board**")
+        if measurands:
+            st.write(", ".join(measurands))
+        else:
+            st.write("_(not listed in index/meta; read from the data file)_")
+
+    with st.expander("🔬 Calibration coefficients (all measurands)", expanded=False):
+        st.caption("How each parameter is calibrated — factory / pre-deployment sensor "
+                   "coefficients (from meta.nc) that convert raw counts to physical "
+                   "units, and delayed-mode (DMQC) adjustments (from the profile file). "
+                   "Blank where a float doesn't report them.")
+        calib_rows = list(scientific_calib_rows(ds))
+        _dac = frow.get("dac") if frow is not None else None
+        if _dac:
+            meta_rel = f"dac/{_dac}/{sel_wmo}/{sel_wmo}_meta.nc"
+            if fetch_from_gdac(meta_rel):
+                try:
+                    _mds = xr.open_dataset(os.path.join(ROOT, meta_rel),
+                                           mask_and_scale=False, decode_times=False)
+                    calib_rows = predeployment_calib_rows(_mds) + calib_rows
+                    _mds.close()
+                except Exception:
+                    pass
+        if calib_rows:
+            cdf = pd.DataFrame(calib_rows)[
+                ["measurand", "source", "coefficient", "equation", "comment", "date"]]
+            st.dataframe(cdf, width="stretch", height=min(80 + 28 * len(cdf), 460))
+        else:
+            st.info("No calibration coefficients are reported in this float's files.")
+
+# ===================== Trajectory: real basemap (pydeck) =====================
+with tab_traj:
+    lat = ds["LATITUDE"].values if "LATITUDE" in ds else None
+    lon = ds["LONGITUDE"].values if "LONGITUDE" in ds else None
+    if lat is None or lon is None or not np.isfinite(lat).any():
+        st.info("No position data for this float.")
+    else:
+        traj = pd.DataFrame({"lat": lat, "lon": lon,
+                             "cycle": (ds["CYCLE_NUMBER"].values
+                                       if "CYCLE_NUMBER" in ds
+                                       else np.arange(len(lat)))})
+        traj = traj.dropna(subset=["lat", "lon"]).reset_index(drop=True)
+        st.markdown(f"**{float_tag} — trajectory**")
+        path_layer = pdk.Layer(
+            "PathLayer",
+            data=pd.DataFrame({"path": [traj[["lon", "lat"]].values.tolist()]}),
+            get_path="path", get_color=[10, 110, 189], get_width=4,
+            width_min_pixels=2)
+        cycle_layer = pdk.Layer(
+            "ScatterplotLayer", data=traj, get_position="[lon, lat]",
+            get_fill_color=[10, 110, 189, 140], get_radius=500,
+            radius_min_pixels=2, pickable=True)
+        ends = pd.DataFrame({
+            "lon": [float(traj["lon"].iloc[0]), float(traj["lon"].iloc[-1])],
+            "lat": [float(traj["lat"].iloc[0]), float(traj["lat"].iloc[-1])],
+            "color": [[0, 170, 70], [210, 40, 20]]})
+        ends_layer = pdk.Layer(
+            "ScatterplotLayer", data=ends, get_position="[lon, lat]",
+            get_fill_color="color", get_radius=1600, radius_min_pixels=6,
+            pickable=False)
+        _span = max(float(traj.lat.max() - traj.lat.min()),
+                    float(traj.lon.max() - traj.lon.min()), 0.5)
+        _zoom = next((z for thr, z in [(1, 7), (3, 6), (8, 5), (20, 4), (50, 3)]
+                      if _span < thr), 2)
+        st.pydeck_chart(pdk.Deck(
+            map_style=None,
+            initial_view_state=pdk.ViewState(
+                latitude=float(traj.lat.mean()), longitude=float(traj.lon.mean()),
+                zoom=_zoom),
+            layers=[path_layer, cycle_layer, ends_layer],
+            tooltip={"text": "cycle {cycle}"}))
+        st.caption("🟢 launch · 🔴 latest · blue line = drift track. "
+                   "Basemap © CARTO / OpenStreetMap.")
+
+# ===================== Profile: parameter + data-view controls live here =====================
+with tab_prof:
+    plottable = [p for p in measurands if p in ds or f"{p}_ADJUSTED" in ds]
+    derived_here = [d for d in DERIVED_2D if d in ds and d not in plottable]
+    if derived_here:
+        plottable = plottable + derived_here     # TEOS-10 fields at the end
+    param_opts = plottable or measurands
+
+    def _default_param_index(opts):
+        for pref in ("TEMP", "PSAL", "CT", "PT", "DOXY"):
+            if pref in opts:
+                return opts.index(pref)
+        for i, o in enumerate(opts):
+            if o not in ("PRES", "MTIME"):
+                return i
+        return 0
+
+    pc1, pc2 = st.columns([2, 2])
+    param = pc1.selectbox("Parameter to plot", param_opts,
+                          index=_default_param_index(param_opts),
+                          help="Includes TEOS-10 derived fields "
+                               "(SIGMA0, CT, PT, SA, AOU) when computable.")
+    view = pc2.radio(
+        "Data view", ["Raw", "QC-filtered", "Adjusted"], index=2, horizontal=True,
+        help="**Raw** — as reported (no QC, no calibration correction). "
+             "**QC-filtered** — raw, keeping only good QC flags {1,2,5,8}. "
+             "**Adjusted** — delayed-mode/adjusted, science-ready values (QC-filtered).")
+    adjusted = view == "Adjusted"
+    apply_qc = view in ("QC-filtered", "Adjusted")
+
+    if param:
+        df, pcol, vcol = param_long_frame(ds, param, adjusted, apply_qc)
+    else:
+        df, pcol, vcol = pd.DataFrame(), None, None
+
+    if not param:
+        st.info("No plottable parameters for this float.")
+    else:
+        st.caption(f"Data mode for {param}: {data_mode_for(ds, param)}")
+        if df.empty:
+            st.warning("No finite points after selection. Try a different **Data view** "
+                       "— this parameter may only exist in raw form for this float.")
+        else:
+            vlabel, plabel = _axis_label(vcol), _axis_label(pcol)
+            if "time" in df.columns:
+                _t = pd.to_datetime(df["time"])
+                cvals = _t.astype("int64").astype("float64")
+                cvals[_t.isna().to_numpy()] = np.nan
+                _lo, _hi = np.nanmin(cvals), np.nanmax(cvals)
+                _tv = list(np.linspace(_lo, _hi, 5)) if np.isfinite(_lo) else []
+                cbar = dict(title="date", tickvals=_tv,
+                            ticktext=[pd.Timestamp(int(t)).strftime("%Y-%m-%d")
+                                      for t in _tv])
+                cdata = _t.dt.strftime("%Y-%m-%d").to_numpy()
+                hover = (f"{vcol}=%{{x:.4g}}<br>{pcol}=%{{y:.1f}} dbar"
+                         "<br>%{customdata}<extra></extra>")
+            else:
+                cvals = df["cycle"].to_numpy()
+                cdata = cvals
+                cbar = dict(title="cycle")
+                hover = (f"{vcol}=%{{x:.4g}}<br>{pcol}=%{{y:.1f}} dbar"
+                         "<br>cycle %{customdata}<extra></extra>")
+            fig = go.Figure(go.Scattergl(
+                x=df["value"], y=df["pres"], mode="markers",
+                marker=dict(size=4, color=cvals, colorscale="Viridis", colorbar=cbar),
+                customdata=cdata, hovertemplate=hover))
+            fig.update_xaxes(title=vlabel)
+            fig.update_yaxes(autorange="reversed", title=plabel)   # depth downward
+            fig.update_layout(height=560)
+            _titled(fig, f"{float_tag} — {param} profile")
+            st.plotly_chart(fig, width="stretch")
+
+            d1, d2 = st.columns(2)
+            d1.download_button("Download this parameter (CSV)",
+                               df.to_csv(index=False).encode(),
+                               file_name=f"{sel_wmo}_{param}.csv", mime="text/csv")
+            _orig_path = os.path.join(ROOT, str(sprof_rel))
+            with open(_orig_path, "rb") as _f:
+                _orig_bytes = _f.read()
+            d2.download_button("Download full float (NetCDF)", _orig_bytes,
+                               file_name=os.path.basename(_orig_path),
+                               mime="application/x-netcdf")
+
+# ======== Profile & Trend (cont.): depth–time section (measurand-driven) ========
+with tab_prof:          # re-enter to append the section, after the profile, before the trend
+    if param and not df.empty:
         st.markdown("---")
         st.subheader(f"{param} depth–time section")
         sec = section_grid(ds, param, adjusted, apply_qc)
@@ -907,7 +978,6 @@ if param:
                 colorbar=dict(title=_axis_label(svcol)),
                 hovertemplate="time=%{x|%Y-%m-%d}<br>pres=%{y:.0f} dbar"
                               "<br>value=%{z:.3g}<extra></extra>"))
-            # overlay MLD if available
             if "MLD" in ds and "JULD" in ds:
                 mld_df = pd.DataFrame({"time": ds["JULD"].values,
                                        "mld": ds["MLD"].values}).dropna()
@@ -926,177 +996,164 @@ if param:
             st.caption("Each profile linearly interpolated onto a common pressure "
                        "grid. White dotted line = mixed-layer depth (where computed).")
 
-        # ---- T-S diagram with density contours ----
-        st.markdown("---")
-        st.subheader("Temperature–Salinity diagram")
-        tsf = ts_diagram_frame(ds)
-        if tsf is None or tsf[0].empty:
-            st.info("Salinity/temperature not available for a T-S diagram.")
-        else:
-            tsdf, xn, yn = tsf
-            # WebGL handles big clouds; only cap the extreme cases
-            if len(tsdf) > 150000:
-                tsdf = tsdf.sample(150000, random_state=0)
-            fig_ts_d = go.Figure()
-            if gsw is not None and xn == "SA":
-                sa_lin = np.linspace(tsdf["sal"].min(), tsdf["sal"].max(), 60)
-                ct_lin = np.linspace(tsdf["temp"].min(), tsdf["temp"].max(), 60)
-                SAg, CTg = np.meshgrid(sa_lin, ct_lin)
-                with np.errstate(invalid="ignore"):
-                    dens = gsw.sigma0(SAg, CTg)
-                fig_ts_d.add_trace(go.Contour(
-                    x=sa_lin, y=ct_lin, z=dens, showscale=False,
-                    contours=dict(coloring="lines", showlabels=True),
-                    line=dict(width=1), colorscale="Greys",
-                    hoverinfo="skip", name="sigma0"))
-            fig_ts_d.add_trace(go.Scattergl(
-                x=tsdf["sal"], y=tsdf["temp"], mode="markers",
-                marker=dict(size=3, color=tsdf["pres"], colorscale="Viridis_r",
-                            reversescale=False, showscale=True,
-                            colorbar=dict(title="PRES [dbar]")),
-                hovertemplate=f"{xn}=%{{x:.2f}}<br>{yn}=%{{y:.2f}}"
-                              "<br>pres=%{marker.color:.0f} dbar<extra></extra>",
-                name="samples"))
-            xu = "g/kg" if xn == "SA" else "psu"
-            yu = "degree_Celsius"
-            fig_ts_d.update_layout(
-                height=520, xaxis_title=f"{xn} [{xu}]", yaxis_title=f"{yn} [{yu}]",
-                margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
-            _titled(fig_ts_d, f"{float_tag} — T–S diagram")
-            st.plotly_chart(fig_ts_d, width="stretch")
-            st.caption("Grey contours = potential density σ₀ (kg/m³); points colored "
-                       "by pressure. Water masses cluster along isopycnals."
-                       if xn == "SA" else
-                       "Practical salinity vs in-situ temperature (install gsw for "
-                       "σ₀ contours & absolute salinity).")
+# ===================== T–S diagram (parameter-independent) =====================
+with tab_ts:
+    st.subheader("Temperature–Salinity diagram")
+    tsf = ts_diagram_frame(ds)
+    if tsf is None or tsf[0].empty:
+        st.info("Salinity/temperature not available for a T-S diagram.")
+    else:
+        tsdf, xn, yn = tsf
+        if len(tsdf) > 150000:
+            tsdf = tsdf.sample(150000, random_state=0)
+        fig_ts_d = go.Figure()
+        if gsw is not None and xn == "SA":
+            sa_lin = np.linspace(tsdf["sal"].min(), tsdf["sal"].max(), 60)
+            ct_lin = np.linspace(tsdf["temp"].min(), tsdf["temp"].max(), 60)
+            SAg, CTg = np.meshgrid(sa_lin, ct_lin)
+            with np.errstate(invalid="ignore"):
+                dens = gsw.sigma0(SAg, CTg)
+            fig_ts_d.add_trace(go.Contour(
+                x=sa_lin, y=ct_lin, z=dens, showscale=False,
+                contours=dict(coloring="lines", showlabels=True),
+                line=dict(width=1), colorscale="Greys",
+                hoverinfo="skip", name="sigma0"))
+        fig_ts_d.add_trace(go.Scattergl(
+            x=tsdf["sal"], y=tsdf["temp"], mode="markers",
+            marker=dict(size=3, color=tsdf["pres"], colorscale="Viridis_r",
+                        reversescale=False, showscale=True,
+                        colorbar=dict(title="PRES [dbar]")),
+            hovertemplate=f"{xn}=%{{x:.2f}}<br>{yn}=%{{y:.2f}}"
+                          "<br>pres=%{marker.color:.0f} dbar<extra></extra>",
+            name="samples"))
+        xu = "g/kg" if xn == "SA" else "psu"
+        yu = "degree_Celsius"
+        fig_ts_d.update_layout(
+            height=520, xaxis_title=f"{xn} [{xu}]", yaxis_title=f"{yn} [{yu}]",
+            margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
+        _titled(fig_ts_d, f"{float_tag} — T–S diagram")
+        st.plotly_chart(fig_ts_d, width="stretch")
+        st.caption("Grey contours = potential density σ₀ (kg/m³); points colored "
+                   "by pressure. Water masses cluster along isopycnals."
+                   if xn == "SA" else
+                   "Practical salinity vs in-situ temperature (install gsw for "
+                   "σ₀ contours & absolute salinity).")
 
-        # ---- time series at a fixed pressure level ----
+# ============ Profile & Trend (cont.): per-pressure time series + Sen/Mann-Kendall ============
+with tab_prof:          # re-enter to append the trend to the Profile & Trend tab
+    if param and not df.empty and "time" not in df.columns:
         st.markdown("---")
         st.subheader(f"{param} time series at a pressure level")
-        if "time" not in df.columns:
-            st.info("This float has no JULD/time coordinate; can't build a time series.")
+        st.info("This float has no JULD/time coordinate; can't build a time series.")
+    elif param and not df.empty:
+        st.markdown("---")
+        st.subheader(f"{param} time series at a pressure level")
+        pmin, pmax = float(df["pres"].min()), float(df["pres"].max())
+        default_p = max(pmin, round(pmin, 1))
+        tcol1, tcol2 = st.columns(2)
+        target_p = tcol1.number_input(
+            "Target pressure (dbar)", min_value=pmin, max_value=pmax,
+            value=default_p, step=1.0,
+            help="Defaults to the shallowest available level (closest to the "
+                 "surface). For each profile the nearest available level is used.")
+        max_gap = tcol2.number_input(
+            "Max distance from target (dbar)", min_value=0.0, value=25.0, step=5.0,
+            help="Drop profiles whose nearest sample is farther than this "
+                 "from the target pressure.")
+        near = (df.assign(dp=(df["pres"] - target_p).abs())
+                  .sort_values("dp").groupby("cycle", as_index=False).first())
+        near = near[near["dp"] <= max_gap].sort_values("time")
+        if near.empty:
+            st.warning(f"No profiles have a sample within {max_gap:g} dbar of "
+                       f"{target_p:g} dbar. Widen the max distance.")
         else:
-            pmin, pmax = float(df["pres"].min()), float(df["pres"].max())
-            # default to the shallowest available level (closest to the surface)
-            default_p = max(pmin, round(pmin, 1))
-            tcol1, tcol2 = st.columns(2)
-            target_p = tcol1.number_input(
-                "Target pressure (dbar)", min_value=pmin, max_value=pmax,
-                value=default_p, step=1.0,
-                help="Defaults to the shallowest available level (closest to the "
-                     "surface). For each profile the nearest available level is used.")
-            max_gap = tcol2.number_input(
-                "Max distance from target (dbar)", min_value=0.0,
-                value=25.0, step=5.0,
-                help="Drop profiles whose nearest sample is farther than this "
-                     "from the target pressure.")
-
-            # nearest level per profile -> one point per cycle
-            near = (df.assign(dp=(df["pres"] - target_p).abs())
-                      .sort_values("dp")
-                      .groupby("cycle", as_index=False)
-                      .first())
-            near = near[near["dp"] <= max_gap].sort_values("time")
-
-            if near.empty:
-                st.warning(f"No profiles have a sample within {max_gap:g} dbar of "
-                           f"{target_p:g} dbar. Widen the max distance.")
+            near = near.copy()
+            deseason = st.toggle(
+                "Deseasonalize (remove monthly climatology)", value=False,
+                key="deseason",
+                help="Subtract each calendar month's mean so a long-term "
+                     "trend isn't masked by the seasonal cycle.")
+            lat_med = near["lat"].median() if "lat" in near else 0.0
+            cal_month = pd.DatetimeIndex(near["time"]).month
+            month = cal_month.to_numpy()
+            if pd.notna(lat_med) and lat_med < 0:      # S. hemisphere: +6 months
+                month = ((month + 5) % 12) + 1
+                hemi = "S"
             else:
-                near = near.copy()
-                deseason = st.toggle(
-                    "Deseasonalize (remove monthly climatology)", value=False,
-                    key="deseason",
-                    help="Subtract each calendar month's mean so a long-term "
-                         "trend isn't masked by the seasonal cycle.")
-
-                # season, hemisphere-aware (meteorological)
-                lat_med = near["lat"].median() if "lat" in near else 0.0
-                cal_month = pd.DatetimeIndex(near["time"]).month
-                month = cal_month.to_numpy()
-                if pd.notna(lat_med) and lat_med < 0:      # S. hemisphere: +6 months
-                    month = ((month + 5) % 12) + 1
-                    hemi = "S"
-                else:
-                    hemi = "N"
-                season_map = {12: "Winter", 1: "Winter", 2: "Winter",
-                              3: "Spring", 4: "Spring", 5: "Spring",
-                              6: "Summer", 7: "Summer", 8: "Summer",
-                              9: "Fall", 10: "Fall", 11: "Fall"}
-                near["season"] = pd.Series(month, index=near.index).map(season_map)
-                near["year"] = pd.DatetimeIndex(near["time"]).year
-                near["cal_month"] = cal_month
-                # anomaly = value minus its calendar-month mean
-                near["anom"] = near["value"] - near.groupby("cal_month")["value"] \
-                                                   .transform("mean")
-                ycol = "anom" if deseason else "value"
-                season_colors = {"Winter": "#4C72B0", "Spring": "#55A868",
-                                 "Summer": "#C44E52", "Fall": "#DD8452"}
-
-                units = ds[vcol].attrs.get("units") if vcol in ds else None
-                base_lab = f"{param} anomaly" if deseason else param
-                ylab = f"{base_lab} [{units}]" if units else base_lab
-
-                fig_ts = go.Figure()
-                # faint time-ordered connector behind the seasonal markers
+                hemi = "N"
+            season_map = {12: "Winter", 1: "Winter", 2: "Winter",
+                          3: "Spring", 4: "Spring", 5: "Spring",
+                          6: "Summer", 7: "Summer", 8: "Summer",
+                          9: "Fall", 10: "Fall", 11: "Fall"}
+            near["season"] = pd.Series(month, index=near.index).map(season_map)
+            near["year"] = pd.DatetimeIndex(near["time"]).year
+            near["cal_month"] = cal_month
+            near["anom"] = near["value"] - near.groupby("cal_month")["value"] \
+                                               .transform("mean")
+            ycol = "anom" if deseason else "value"
+            season_colors = {"Winter": "#4C72B0", "Spring": "#55A868",
+                             "Summer": "#C44E52", "Fall": "#DD8452"}
+            units = ds[vcol].attrs.get("units") if vcol in ds else None
+            base_lab = f"{param} anomaly" if deseason else param
+            ylab = f"{base_lab} [{units}]" if units else base_lab
+            fig_ts = go.Figure()
+            fig_ts.add_trace(go.Scatter(
+                x=near["time"], y=near[ycol], mode="lines",
+                line=dict(color="rgba(150,150,150,0.4)", width=1),
+                showlegend=False, hoverinfo="skip"))
+            for s in ["Winter", "Spring", "Summer", "Fall"]:
+                sub = near[near["season"] == s]
+                if sub.empty:
+                    continue
                 fig_ts.add_trace(go.Scatter(
-                    x=near["time"], y=near[ycol], mode="lines",
-                    line=dict(color="rgba(150,150,150,0.4)", width=1),
-                    showlegend=False, hoverinfo="skip"))
-                for s in ["Winter", "Spring", "Summer", "Fall"]:
-                    sub = near[near["season"] == s]
-                    if sub.empty:
-                        continue
-                    fig_ts.add_trace(go.Scatter(
-                        x=sub["time"], y=sub[ycol], mode="markers",
-                        marker=dict(size=8, color=season_colors[s]), name=s,
-                        customdata=sub["pres"],
-                        hovertemplate=(f"{base_lab}=%{{y:.3g}}<br>"
-                                       "time=%{x|%Y-%m-%d}<br>"
-                                       "pres=%{customdata:.1f} dbar"
-                                       f"<br>season={s}<extra></extra>")))
-                # robust trend: Sen's slope line + Mann-Kendall significance
-                t_years = (pd.DatetimeIndex(near["time"]).asi8.astype("float64")
-                           / (365.25 * 24 * 3600 * 1e9))
-                yv = near[ycol].to_numpy(dtype="float64")
-                res = mann_kendall_sen(t_years, yv)
-                if res and np.isfinite(res["sen"]):
-                    sen = res["sen"]
-                    inter = np.median(yv) - sen * np.median(t_years)
-                    fig_ts.add_trace(go.Scatter(
-                        x=near["time"], y=sen * t_years + inter, mode="lines",
-                        line=dict(color="black", width=2, dash="dash"),
-                        name=f"Sen slope {sen:+.3g}/yr"))
-                fig_ts.update_layout(height=460, xaxis_title="time",
-                                     yaxis_title=ylab, legend_title="season",
-                                     margin=dict(l=0, r=0, t=10, b=0))
-                _titled(fig_ts, f"{float_tag} — {param} at {target_p:g} dbar")
-                st.plotly_chart(fig_ts, width="stretch")
+                    x=sub["time"], y=sub[ycol], mode="markers",
+                    marker=dict(size=8, color=season_colors[s]), name=s,
+                    customdata=sub["pres"],
+                    hovertemplate=(f"{base_lab}=%{{y:.3g}}<br>"
+                                   "time=%{x|%Y-%m-%d}<br>"
+                                   "pres=%{customdata:.1f} dbar"
+                                   f"<br>season={s}<extra></extra>")))
+            t_years = (pd.DatetimeIndex(near["time"]).asi8.astype("float64")
+                       / (365.25 * 24 * 3600 * 1e9))
+            yv = near[ycol].to_numpy(dtype="float64")
+            res = mann_kendall_sen(t_years, yv)
+            if res and np.isfinite(res["sen"]):
+                sen = res["sen"]
+                inter = np.median(yv) - sen * np.median(t_years)
+                fig_ts.add_trace(go.Scatter(
+                    x=near["time"], y=sen * t_years + inter, mode="lines",
+                    line=dict(color="black", width=2, dash="dash"),
+                    name=f"Sen slope {sen:+.3g}/yr"))
+            fig_ts.update_layout(height=460, xaxis_title="time",
+                                 yaxis_title=ylab, legend_title="season",
+                                 margin=dict(l=0, r=0, t=10, b=0))
+            _titled(fig_ts, f"{float_tag} — {param} at {target_p:g} dbar")
+            st.plotly_chart(fig_ts, width="stretch")
 
-                # trend statistics panel
-                if res and np.isfinite(res["sen"]):
-                    p = res["p"]
-                    sig = ("not significant (p≥0.05)"
-                           if not np.isfinite(p) or p >= 0.05 else
-                           "significant (p<0.05)" if p >= 0.01 else
-                           "highly significant (p<0.01)")
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Sen's slope", f"{res['sen']:+.3g} {units or ''}/yr")
-                    m2.metric("Mann-Kendall p",
-                              "n/a" if not np.isfinite(p) else f"{p:.3g}")
-                    m3.metric("Trend", sig)
-                    st.caption(
-                        f"n={res['n']} profiles · Sen's slope = median pairwise rate "
-                        "(outlier-robust); Mann-Kendall tests for a monotonic trend. "
-                        + ("Series shown is the deseasonalized anomaly."
-                           if deseason else
-                           "Turn on deseasonalize to remove the annual cycle first."))
+            if res and np.isfinite(res["sen"]):
+                p = res["p"]
+                sig = ("not significant (p≥0.05)"
+                       if not np.isfinite(p) or p >= 0.05 else
+                       "significant (p<0.05)" if p >= 0.01 else
+                       "highly significant (p<0.01)")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Sen's slope", f"{res['sen']:+.3g} {units or ''}/yr")
+                m2.metric("Mann-Kendall p",
+                          "n/a" if not np.isfinite(p) else f"{p:.3g}")
+                m3.metric("Trend", sig)
                 st.caption(
-                    f"{len(near)} profiles · nearest-level pressures "
-                    f"{near['pres'].min():.1f}–{near['pres'].max():.1f} dbar "
-                    f"(target {target_p:g}) · {hemi}-hemisphere meteorological seasons.")
-                st.download_button(
-                    "Download time series (CSV)",
-                    near[["time", "year", "season", "pres", "value", "anom", "cycle"]]
-                        .to_csv(index=False).encode(),
-                    file_name=f"{sel_wmo}_{param}_ts_{target_p:.0f}dbar.csv",
-                    mime="text/csv", key="ts_download")
+                    f"n={res['n']} profiles · Sen's slope = median pairwise rate "
+                    "(outlier-robust); Mann-Kendall tests for a monotonic trend. "
+                    + ("Series shown is the deseasonalized anomaly."
+                       if deseason else
+                       "Turn on deseasonalize to remove the annual cycle first."))
+            st.caption(
+                f"{len(near)} profiles · nearest-level pressures "
+                f"{near['pres'].min():.1f}–{near['pres'].max():.1f} dbar "
+                f"(target {target_p:g}) · {hemi}-hemisphere meteorological seasons.")
+            st.download_button(
+                "Download time series (CSV)",
+                near[["time", "year", "season", "pres", "value", "anom", "cycle"]]
+                    .to_csv(index=False).encode(),
+                file_name=f"{sel_wmo}_{param}_ts_{target_p:.0f}dbar.csv",
+                mime="text/csv", key="ts_download")

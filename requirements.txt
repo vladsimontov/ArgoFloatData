@@ -1,4 +1,5 @@
 streamlit>=1.36
+pydeck>=0.9         # real basemap under the float trajectory
 plotly>=5.22
 pandas>=2.0
 numpy>=1.24
