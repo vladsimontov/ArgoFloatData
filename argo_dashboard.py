@@ -389,8 +389,8 @@ sensors, floats = load_tables(ROOT)
 mani = read_manifest(ROOT)
 
 st.title("🌊 Argo Float Data Explorer")
-st.caption("BGC, Core & Deep Argo (incl. SBE61 6000 m) float profiles — search the "
-           "whole array by sensor serial number, model, WMO, or region.")
+st.caption("BGC, Core & Deep Argo float profiles.  Search the "
+           "whole array by sensor serial number, model or WMO.")
 if sensors is None:
     st.error(
         f"No index found in `{ROOT}`.\n\n"
@@ -806,12 +806,14 @@ if param:
             st.info("This float has no JULD/time coordinate; can't build a time series.")
         else:
             pmin, pmax = float(df["pres"].min()), float(df["pres"].max())
-            default_p = float(min(max(20.0, pmin), pmax))
+            # default to the shallowest available level (closest to the surface)
+            default_p = max(pmin, round(pmin, 1))
             tcol1, tcol2 = st.columns(2)
             target_p = tcol1.number_input(
                 "Target pressure (dbar)", min_value=pmin, max_value=pmax,
-                value=round(default_p, 1), step=1.0,
-                help="For each profile the nearest available pressure level is used.")
+                value=default_p, step=1.0,
+                help="Defaults to the shallowest available level (closest to the "
+                     "surface). For each profile the nearest available level is used.")
             max_gap = tcol2.number_input(
                 "Max distance from target (dbar)", min_value=0.0,
                 value=25.0, step=5.0,
