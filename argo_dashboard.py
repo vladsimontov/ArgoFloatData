@@ -603,10 +603,12 @@ if {"data_kind", "is_deep"}.issubset(floats.columns):
                    zip(floats["wmo"], floats["data_kind"], floats["is_deep"])}
 
 if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
+    n_floats = int(hits["wmo"].nunique())
+    st.markdown(f"**{n_floats:,} float{'s' if n_floats != 1 else ''} found**")
     unique_only = st.toggle(
-        "Show unique floats only", value=False,
-        help="Collapse the per-sensor rows into one row per float (WMO), "
-             "listing how many sensors matched and their models.")
+        "Show unique floats only", value=True,
+        help="On: one row per float (WMO), with how many sensors matched and their "
+             "models. Off: one row per matching sensor.")
     if unique_only:
         show = (hits.groupby("wmo", as_index=False)
                 .agg(float_serial_no=("float_serial_no", "first"),
