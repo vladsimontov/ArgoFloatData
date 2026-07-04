@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://vladsimontov.github.io/ArgoFloatData/sitemap.xml

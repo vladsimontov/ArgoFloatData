@@ -54,8 +54,9 @@ NEW_ISSUE_URL = ISSUES_URL.rstrip("/") + "/new"
 GDAC = os.environ.get("ARGO_GDAC", "https://data-argo.ifremer.fr").rstrip("/")
 # -----------------------------------------------------------------------------
 
-st.set_page_config(page_title="BGC-Argo Explorer", layout="wide",
-                   initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="Argo Float Data Explorer: BGC, Core & Deep Argo profiles",
+    page_icon="🌊", layout="wide", initial_sidebar_state="expanded")
 
 # small style polish (Streamlit constrains most styling)
 st.markdown("""
@@ -387,7 +388,9 @@ def mann_kendall_sen(t_years, y):
 sensors, floats = load_tables(ROOT)
 mani = read_manifest(ROOT)
 
-st.title("BGC-Argo Explorer")
+st.title("🌊 Argo Float Data Explorer")
+st.caption("BGC, Core & Deep Argo (incl. SBE61 6000 m) float profiles — search the "
+           "whole array by sensor serial number, model, WMO, or region.")
 if sensors is None:
     st.error(
         f"No index found in `{ROOT}`.\n\n"

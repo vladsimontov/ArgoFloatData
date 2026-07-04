@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- ============================================================= -->
+<!--  EDIT THESE TWO URLs if they differ:                          -->
+<!--  APP_URL = your live Streamlit app  (confirm the subdomain)   -->
+<!--  SITE_URL = your GitHub Pages URL                             -->
+<!-- ============================================================= -->
+
+<title>Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles</title>
+<meta name="description" content="Search and visualize the entire Argo float array — BGC, core, and Deep Argo (SBE61 6000 m) — by sensor serial number, model, WMO, or region. Interactive profiles, depth–time sections, T–S diagrams, and trends, with data streamed live from the Argo GDAC.">
+<meta name="keywords" content="Argo, Argo floats, BGC-Argo, Deep Argo, SBE61, core Argo, ocean float data, oceanography, temperature salinity profiles, ocean profiling floats, GDAC, TEOS-10, ocean observing, float serial number, WMO, biogeochemical Argo, ocean data visualization">
+<meta name="author" content="Vlad Simontov">
+<link rel="canonical" href="https://vladsimontov.github.io/ArgoFloatData/">
+<meta name="robots" content="index, follow">
+
+<!-- Open Graph / social cards -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Argo Float Data Explorer">
+<meta property="og:title" content="Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles">
+<meta property="og:description" content="Search the entire Argo float array — BGC, core, and Deep Argo (SBE61 6000 m) — and visualize profiles, sections, T–S diagrams, and trends. Data streamed live from the GDAC.">
+<meta property="og:url" content="https://vladsimontov.github.io/ArgoFloatData/">
+<meta property="og:image" content="https://vladsimontov.github.io/ArgoFloatData/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles">
+<meta name="twitter:description" content="Search and visualize the entire Argo float array — BGC, core, and Deep Argo (SBE61 6000 m). Live data from the GDAC.">
+<meta name="twitter:image" content="https://vladsimontov.github.io/ArgoFloatData/og-image.png">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
+
+<!-- Structured data: helps Google understand the tool -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  "name": "Argo Float Data Explorer",
+  "description": "Search and visualize the entire Argo float array — BGC, core, and Deep Argo (SBE61 6000 m) — by sensor serial number, model, WMO, or region.",
+  "url": "https://argofloatdata.streamlit.app",
+  "applicationCategory": "ScienceApplication",
+  "operatingSystem": "Any (web browser)",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "isBasedOn": "https://doi.org/10.17882/42182",
+  "keywords": "Argo, BGC-Argo, Deep Argo, SBE61, oceanography, ocean float data",
+  "license": "https://opensource.org/licenses/MIT"
+}
+</script>
+
+<style>
+  :root{
+    --bg:#f6f9fc; --card:#ffffff; --ink:#0b2540; --muted:#4a6480;
+    --line:#e2ebf3; --brand:#0a6ebd; --brand2:#0ea5a5; --accent:#0b3d63;
+    --shadow:0 1px 3px rgba(11,37,64,.08),0 8px 24px rgba(11,37,64,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0a1420; --card:#101f30; --ink:#e8f1fa; --muted:#9db4cb;
+      --line:#1e3448; --brand:#3aa0e8; --brand2:#2dd4bf; --accent:#bfe0f7;
+      --shadow:0 1px 3px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35); }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px}
+
+  header.hero{
+    background:linear-gradient(160deg,#062a45 0%,#0a5a8f 55%,#0e8f8f 100%);
+    color:#eaf6ff;padding:72px 0 64px;text-align:center;position:relative;overflow:hidden}
+  header.hero::after{content:"";position:absolute;inset:auto 0 -1px 0;height:80px;
+    background:linear-gradient(to bottom,transparent,var(--bg))}
+  .hero h1{font-size:2.5rem;line-height:1.15;margin:.2em 0 .3em;font-weight:800;letter-spacing:-.02em}
+  .hero p.tag{font-size:1.2rem;max-width:640px;margin:0 auto 1.6em;color:#cfe9fb}
+  .cta{display:inline-flex;gap:.5em;align-items:center;background:#fff;color:#0a5a8f;
+    font-weight:700;padding:.85em 1.5em;border-radius:10px;box-shadow:var(--shadow);
+    font-size:1.05rem}
+  .cta:hover{text-decoration:none;transform:translateY(-1px);transition:.15s}
+  .cta.ghost{background:rgba(255,255,255,.12);color:#eaf6ff;box-shadow:none;
+    border:1px solid rgba(255,255,255,.35)}
+  .cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:-42px auto 0;
+    position:relative;z-index:2}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:18px 10px;text-align:center;box-shadow:var(--shadow)}
+  .stat b{display:block;font-size:1.6rem;color:var(--brand);font-weight:800;letter-spacing:-.01em}
+  .stat span{font-size:.82rem;color:var(--muted)}
+
+  section{padding:44px 0}
+  h2{font-size:1.55rem;margin:0 0 .2em;letter-spacing:-.01em}
+  .lead{color:var(--muted);margin:.2em 0 1.4em}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+  .feat{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:20px;box-shadow:var(--shadow)}
+  .feat h3{margin:.1em 0 .3em;font-size:1.08rem}
+  .feat p{margin:0;color:var(--muted);font-size:.94rem}
+  .feat .ic{font-size:1.5rem}
+
+  .cite{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--brand2);
+    border-radius:10px;padding:18px 20px;color:var(--muted);font-size:.92rem}
+  .cite code{background:rgba(14,165,165,.12);padding:.1em .4em;border-radius:5px;
+    color:var(--accent);font-size:.86em}
+
+  footer{border-top:1px solid var(--line);padding:28px 0 48px;color:var(--muted);font-size:.9rem}
+  footer a{color:var(--muted);text-decoration:underline}
+  .flinks{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px}
+
+  @media (max-width:640px){
+    .hero h1{font-size:2rem}
+    .stats{grid-template-columns:repeat(2,1fr)}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>🌊 Argo Float Data Explorer</h1>
+    <p class="tag">Search and visualize the <strong>entire Argo float array</strong> —
+      BGC, core, and Deep&nbsp;Argo (SBE61 6000&nbsp;m) — by sensor serial number,
+      model, WMO, or region.</p>
+    <div class="cta-row">
+      <!-- APP_URL — confirm this matches your live Streamlit subdomain -->
+      <a class="cta" href="https://argofloatdata.streamlit.app">Launch the app →</a>
+      <a class="cta ghost" href="https://github.com/vladsimontov/ArgoFloatData">View on GitHub</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><b>20,320</b><span>floats searchable</span></div>
+    <div class="stat"><b>2,891</b><span>BGC floats</span></div>
+    <div class="stat"><b>581</b><span>Deep Argo floats</span></div>
+    <div class="stat"><b>~350</b><span>SBE61 6000&nbsp;m</span></div>
+  </div>
+</div>
+
+<section class="wrap">
+  <h2>Every Argo float, one search box</h2>
+  <p class="lead">A fast, free tool for oceanographers and the curious. Look up a
+    sensor by serial number and find the float it belongs to, every other sensor on
+    board, where it is, and what it has measured — across the whole global Argo
+    program.</p>
+  <div class="grid">
+    <div class="feat"><div class="ic">🔎</div><h3>Search the whole array</h3>
+      <p>Find any of 20,320 floats by CTD/sensor <strong>serial number</strong>,
+        sensor model (e.g. SBE41, <strong>SBE61</strong>), WMO number, or ocean region.</p></div>
+    <div class="feat"><div class="ic">🛟</div><h3>BGC, Core &amp; Deep Argo</h3>
+      <p>Biogeochemical (Sprof), physical core (prof), and full-depth
+        <strong>Deep&nbsp;Argo</strong> floats — including 6000&nbsp;m SBE61 Deep SOLO,
+        Deep APEX, and Xuanwu profilers.</p></div>
+    <div class="feat"><div class="ic">📈</div><h3>Rich, interactive plots</h3>
+      <p>Vertical profiles (raw or adjusted, QC-aware), depth–time sections,
+        temperature–salinity diagrams, and per-pressure time series with trend tests.</p></div>
+    <div class="feat"><div class="ic">🧪</div><h3>TEOS-10 derived quantities</h3>
+      <p>Potential density σ₀, conservative temperature, mixed-layer depth, and
+        apparent oxygen utilization, computed on the fly with <code>gsw</code>.</p></div>
+    <div class="feat"><div class="ic">🛰️</div><h3>Always-live data</h3>
+      <p>Float profiles are fetched on demand straight from the Argo
+        <strong>GDAC</strong> when you open a float — no stale local mirror.</p></div>
+    <div class="feat"><div class="ic">🆓</div><h3>Open &amp; free</h3>
+      <p>MIT-licensed code, built on freely available Argo data. No login, no cost —
+        for everyone.</p></div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>How it works</h2>
+  <p class="lead">The app stores only a compact metadata index for all ~20,000 floats
+    (a few megabytes), so search is instant. When you open a float, its full profile
+    dataset is streamed live from the Argo Global Data Assembly Centre and cached —
+    the best of both worlds: complete coverage without hosting hundreds of gigabytes.</p>
+  <div class="cite">
+    <strong>Data source &amp; citation.</strong> These data were collected and made
+    freely available by the <strong>International Argo Program</strong> and the national
+    programs that contribute to it (part of the Global Ocean Observing System). Argo
+    data are licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC&nbsp;BY&nbsp;4.0</a>.
+    Please cite: Argo (2026). <em>Argo float data and metadata from Global Data Assembly
+    Centre (Argo GDAC)</em>. SEANOE. <code>https://doi.org/10.17882/42182</code>.
+    Derived quantities shown here are not official Argo products.
+  </div>
+</section>
+
+<footer class="wrap">
+  <div class="flinks">
+    <a href="https://argofloatdata.streamlit.app">Launch the app</a>
+    <a href="https://github.com/vladsimontov/ArgoFloatData">Source (GitHub)</a>
+    <a href="https://argo.ucsd.edu">About Argo</a>
+    <a href="https://doi.org/10.17882/42182">Argo data DOI</a>
+  </div>
+  Independent, community tool — not affiliated with or endorsed by the Argo Program.
+  Code © 2026 Vlad Simontov (MIT). Built with the help of Claude. 🌊
+</footer>
+
+</body>
+</html>
