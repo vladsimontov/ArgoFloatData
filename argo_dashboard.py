@@ -23,7 +23,6 @@ import tempfile
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 import pydeck as pdk
 import xarray as xr
 import plotly.express as px
@@ -80,7 +79,7 @@ st.markdown("""
 #  2) let the browser handle Ctrl/Cmd shortcuts (copy/paste/cut/select-all) instead
 #     of Streamlit's single-key hotkeys (c = clear cache, r = rerun), which otherwise
 #     hijack Ctrl+C. Capture-phase on window fires before Streamlit's handler.
-components.html("""
+st.iframe("""
 <script>
 const win = window.parent, doc = win.document;
 function noAutocorrect(){
@@ -100,7 +99,7 @@ win.addEventListener('keydown', function(e){
   if (e.ctrlKey || e.metaKey) e.stopImmediatePropagation();
 }, true);
 </script>
-""", height=0)
+""", height=1)
 
 
 # ---------------- data loading (cached) ----------------
