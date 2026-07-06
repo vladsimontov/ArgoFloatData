@@ -716,7 +716,15 @@ if not wmos:
 if st.session_state.get("wmo_pick") not in wmos:
     st.session_state.pop("wmo_pick", None)
 sel_wmo = st.selectbox("Select a float (WMO) to inspect", wmos, key="wmo_pick",
-                       help="Or click a row in the Matches table above.")
+                       index=None, placeholder="Choose a float to load its profile",
+                       help="Or click a row's checkbox in the Matches table above. The "
+                            "profile is fetched from the GDAC only once you pick a "
+                            "float, so search results appear instantly.")
+if not sel_wmo:
+    st.info("Pick a float to load its profile: click a row's checkbox in the table "
+            "above, or use the selector. Nothing is downloaded until you choose one, so "
+            "your search results stay instant.")
+    st.stop()
 
 # ---- resolve the selected float and load its data ----
 frow = floats[floats["wmo"].astype(str) == str(sel_wmo)]
