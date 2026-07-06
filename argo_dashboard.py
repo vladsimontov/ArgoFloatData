@@ -193,6 +193,8 @@ def fetch_from_gdac(rel, retries=3):
         try:
             with requests.get(url, stream=True, timeout=180,
                               headers={"User-Agent": "argo-dashboard/0.2"}) as r:
+                if 400 <= r.status_code < 500:
+                    return False   # file isn't there (e.g. 404); don't retry
                 r.raise_for_status()
                 tmp = dest + ".part"
                 with open(tmp, "wb") as f:
@@ -210,6 +212,24 @@ def fetch_from_gdac(rel, retries=3):
 @st.cache_data(show_spinner=True)
 def load_sprof(path):
     return add_derived(xr.open_dataset(path, decode_times=True))
+
+
+@st.cache_data(show_spinner=False)
+def load_raw(path):
+    # a single-cycle file, opened as reported (no derived fields, no QC filtering)
+    return xr.open_dataset(path, decode_times=True)
+
+
+@st.cache_data(show_spinner=False)
+def fetch_raw_profile(dac, wmo, cycle, is_bgc):
+    """Fetch one cycle's raw NetCDF: the B-file for BGC floats, else the core
+    profile file. Tries delayed-mode then real-time; returns the rel path or None."""
+    prefixes = ["BD", "BR"] if is_bgc else ["D", "R"]
+    for p in prefixes:
+        rel = f"dac/{dac}/{wmo}/profiles/{p}{wmo}_{int(cycle):03d}.nc"
+        if fetch_from_gdac(rel):
+            return rel
+    return None
 
 
 def read_manifest(root):
@@ -766,8 +786,8 @@ def _axis_label(var):
 
 
 # ---- per-float views as tabs (sidebar search + results table stay global) ----
-tab_over, tab_traj, tab_prof, tab_ts = st.tabs(
-    ["Overview", "Trajectory", "Profile & Trend", "T-S"])
+tab_over, tab_traj, tab_prof, tab_ts, tab_raw = st.tabs(
+    ["Overview", "Trajectory", "Profile & Trend", "T-S", "Raw"])
 
 # ===================== Overview: metadata + sensors + calibration =====================
 with tab_over:
@@ -1200,3 +1220,70 @@ with tab_prof:          # re-enter to append the trend to the Profile & Trend ta
                     .to_csv(index=False).encode(),
                 file_name=f"{sel_wmo}_{param}_ts_{target_p:.0f}dbar.csv",
                 mime="text/csv", key="ts_download")
+
+# ===================== Raw: per-cycle diagnostic profile =====================
+with tab_raw:
+    st.subheader("Raw profile (per-cycle diagnostics)")
+    st.caption("Pulls a single cycle's raw NetCDF straight from the GDAC, with every "
+               "parameter it reports, including intermediate sensor signals (raw "
+               "fluorescence, backscatter, optode phase, and so on) that are not carried "
+               "into the synthetic product. One profile at a time, unadjusted and with "
+               "no QC filtering.")
+    _is_bgc = str(frow.get("data_kind")) == "bgc" if frow is not None else False
+    _dac = frow.get("dac") if frow is not None else None
+    _cyc_vals = (sorted({int(c) for c in np.asarray(ds["CYCLE_NUMBER"].values).ravel()
+                         if np.isfinite(c)}) if "CYCLE_NUMBER" in ds else [])
+    if not _dac or not _cyc_vals:
+        st.info("No per-cycle files are available for this float.")
+    else:
+        rc1, rc2 = st.columns([1, 2])
+        sel_cyc = rc1.selectbox("Cycle (profile)", _cyc_vals, index=len(_cyc_vals) - 1,
+                                help="Each cycle is one dive. Pulls that cycle's raw file "
+                                     "from the GDAC, cached after the first load.")
+        _kind = "B-file" if _is_bgc else "profile file"
+        with st.spinner(f"Fetching cycle {sel_cyc} {_kind} from the GDAC"):
+            raw_rel = fetch_raw_profile(_dac, sel_wmo, sel_cyc, _is_bgc)
+        if not raw_rel:
+            st.warning(f"Couldn't fetch a raw file for cycle {sel_cyc}. It may not exist "
+                       "at the GDAC, or the GDAC is unreachable.")
+        else:
+            raw_ds = load_raw(os.path.join(ROOT, raw_rel))
+            _pdims = raw_ds["PRES"].dims if "PRES" in raw_ds else None
+            raw_params = [v for v in raw_ds.data_vars
+                          if _pdims is not None and v != "PRES"
+                          and raw_ds[v].dims == _pdims
+                          and np.issubdtype(raw_ds[v].dtype, np.number)
+                          and not v.endswith("_QC")]
+            if not raw_params:
+                st.info(f"`{os.path.basename(raw_rel)}` reports no plottable measurands.")
+            else:
+                _def = next((i for i, v in enumerate(raw_params)
+                             if not v.endswith("_ADJUSTED")), 0)
+                sel_rp = rc2.selectbox("Measurand (raw)", raw_params, index=_def,
+                                       help="Every parameter in the raw file, including "
+                                            "intermediate sensor signals.")
+                st.caption(f"Source: `{os.path.basename(raw_rel)}`, "
+                           f"{raw_ds.sizes.get('N_PROF', 1)} profile(s) in this cycle.")
+                pres = np.asarray(raw_ds["PRES"].values, dtype="float64").ravel()
+                val = np.asarray(raw_ds[sel_rp].values, dtype="float64").ravel()
+                m = np.isfinite(pres) & np.isfinite(val)
+                if not m.any():
+                    st.warning(f"No finite `{sel_rp}` samples in cycle {sel_cyc}.")
+                else:
+                    units = raw_ds[sel_rp].attrs.get("units")
+                    xlab = f"{sel_rp} [{units}]" if units else sel_rp
+                    figr = go.Figure(go.Scattergl(
+                        x=val[m], y=pres[m], mode="markers+lines",
+                        marker=dict(size=5, color="#0b7285"),
+                        line=dict(color="rgba(11,114,133,0.35)", width=1),
+                        hovertemplate=f"{sel_rp}=%{{x:.4g}}<br>PRES=%{{y:.1f}} dbar"
+                                      "<extra></extra>"))
+                    figr.update_xaxes(title=xlab)
+                    figr.update_yaxes(autorange="reversed", title="PRES [decibar]")
+                    figr.update_layout(height=560)
+                    _titled(figr, f"{float_tag} · cycle {sel_cyc} raw {sel_rp}")
+                    st.plotly_chart(figr, width="stretch")
+                    with open(os.path.join(ROOT, raw_rel), "rb") as _f:
+                        st.download_button("Download this raw cycle (NetCDF)", _f.read(),
+                                           file_name=os.path.basename(raw_rel),
+                                           mime="application/x-netcdf", key="raw_dl")

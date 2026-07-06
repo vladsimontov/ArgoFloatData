@@ -29,7 +29,7 @@ searchable from a repo just a few megabytes in size.
   serial, WMO, DAC, platform type/maker, **all sensors**, measurands on board,
   **days deployed**, last position, an approximate **region** (climate band + ocean
   basin), and which data file backs it (BGC vs core).
-- **Interactive plots**, grouped into tabs (Overview · Trajectory · Profile & Trend · T-S):
+- **Interactive plots**, grouped into tabs (Overview · Trajectory · Profile & Trend · T-S · Raw):
   - **Trajectory map:** the float's drift track on an interactive **basemap**
     (pydeck + Carto tiles), with launch and latest positions marked.
   - **Vertical profiles:** real-time or `*_ADJUSTED`, QC-flag aware, colored by date.
@@ -37,6 +37,9 @@ searchable from a repo just a few megabytes in size.
   - **Temperature-Salinity diagram** with σ₀ density contours.
   - **Time series at a chosen pressure:** nearest-level, colored by season, with a
     **Sen's-slope + Mann-Kendall** trend test and optional deseasonalizing.
+  - **Raw per-cycle diagnostics** (B-files): a single cycle's raw NetCDF pulled from
+    the GDAC, with the intermediate sensor signals (raw fluorescence, backscatter,
+    optode phase) that are not carried into the synthetic product.
 - **TEOS-10 derived fields** (via `gsw`): potential density σ₀, conservative &
   potential temperature, absolute salinity, apparent oxygen utilization, and mixed
   layer depth, all computed on the fly.

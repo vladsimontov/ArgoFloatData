@@ -11,8 +11,8 @@
 <!-- ============================================================= -->
 
 <title>Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles</title>
-<meta name="description" content="Find an Argo float by its CTD/sensor serial number, model, WMO, or region. Search the entire array of BGC, core, and Deep Argo (SBE61 6000 m) floats, and visualize profiles, depth-time sections, T-S diagrams, and trends, with data streamed live from the Argo GDAC.">
-<meta name="keywords" content="Argo, Argo floats, BGC-Argo, Deep Argo, SBE61, core Argo, ocean float data, oceanography, temperature salinity profiles, ocean profiling floats, GDAC, TEOS-10, ocean observing, float serial number, WMO, biogeochemical Argo, ocean data visualization">
+<meta name="description" content="Find an Argo float by its CTD/sensor serial number, model, WMO, or region. Search the entire array of BGC, core, and Deep Argo (SBE61 6000 m) floats, and visualize profiles, depth-time sections, T-S diagrams, trends, and raw per-cycle sensor diagnostics (B-file), with data streamed live from the Argo GDAC.">
+<meta name="keywords" content="Argo, Argo floats, BGC-Argo, Deep Argo, SBE61, core Argo, ocean float data, oceanography, temperature salinity profiles, ocean profiling floats, GDAC, TEOS-10, ocean observing, float serial number, WMO, biogeochemical Argo, ocean data visualization, raw Argo data, Argo B-file, raw sensor data, intermediate parameters, per-cycle diagnostics, raw fluorescence, optode phase">
 <meta name="author" content="Vlad Simontov">
 <link rel="canonical" href="https://vladsimontov.github.io/ArgoFloatData/">
 <meta name="robots" content="index, follow">
@@ -21,7 +21,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Argo Float Data Explorer">
 <meta property="og:title" content="Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles">
-<meta property="og:description" content="Find an Argo float by its CTD/sensor serial number, model, or WMO. Search the entire array of BGC, core, and Deep Argo (SBE61 6000 m) floats, and visualize profiles, sections, T-S diagrams, and trends.">
+<meta property="og:description" content="Find an Argo float by its CTD/sensor serial number, model, or WMO. Search the entire array of BGC, core, and Deep Argo (SBE61 6000 m) floats, and visualize profiles, sections, T-S diagrams, trends, and raw per-cycle B-file diagnostics.">
 <meta property="og:url" content="https://vladsimontov.github.io/ArgoFloatData/">
 <meta property="og:image" content="https://vladsimontov.github.io/ArgoFloatData/og-image.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -149,7 +149,7 @@
     <img src="screenshot.png" width="1280" loading="lazy"
       alt="Argo Float Data Explorer showing the trajectory of Argo float 7901065 on an interactive basemap, showing the float's drift track across the Black Sea, with launch and latest positions marked.">
     <p class="cap">A float's drift track on an interactive basemap, one of several
-      tabbed views (Overview, Trajectory, Profile &amp; Trend, T-S).</p>
+      tabbed views (Overview, Trajectory, Profile &amp; Trend, T-S, Raw).</p>
   </div>
 </div>
 
@@ -174,6 +174,10 @@
       <p>An interactive trajectory basemap, vertical profiles (raw or adjusted,
         QC-aware), depth-time sections, temperature-salinity diagrams, and
         per-pressure time series with trend tests.</p></div>
+    <div class="feat"><div class="ic">🔬</div><h3>Raw per-cycle diagnostics</h3>
+      <p>Pull a single cycle's raw B-file straight from the GDAC and inspect the
+        intermediate sensor signals (raw fluorescence, backscatter, optode phase)
+        that never reach the synthetic product.</p></div>
     <div class="feat"><div class="ic">🧪</div><h3>TEOS-10 derived quantities</h3>
       <p>Potential density σ₀, conservative temperature, mixed-layer depth, and
         apparent oxygen utilization, computed on the fly with <code>gsw</code>.</p></div>
