@@ -7,7 +7,7 @@ served from the (CDN-backed) GitHub Pages site and queryable over HTTP with
 DuckDB / pandas — including the serial-number / sensor lookups that the GDAC,
 ERDDAP, and Argovis don't offer.
 
-Outputs (all deterministic, so the weekly refresh only commits real changes):
+Outputs (all deterministic, so the daily refresh only commits real changes):
   docs/api/floats.parquet   full per-float table (copy of the crosswalk)
   docs/api/sensors.parquet  full per-sensor table (serial/model/maker)
   docs/api/floats.json      compact per-float index (quick/browser use)

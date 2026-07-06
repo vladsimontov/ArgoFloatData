@@ -7,7 +7,7 @@ name: Refresh Argo metadata
 
 on:
   schedule:
-    - cron: "17 5 * * 1"      # weekly, Mondays 05:17 UTC
+    - cron: "17 5 * * *"      # daily, 05:17 UTC
   workflow_dispatch: {}        # allow manual "Run workflow"
 
 # only one refresh at a time; let a run finish rather than cancel it
@@ -64,7 +64,7 @@ jobs:
             echo "No new floats this run — nothing to commit."
           else
             git add argo_local/manifest.json
-            git commit -m "chore: weekly Argo metadata refresh [skip ci]"
+            git commit -m "chore: daily Argo metadata refresh [skip ci]"
             git pull --rebase origin main || true
             git push
             echo "Pushed refreshed index — Streamlit Cloud will redeploy."

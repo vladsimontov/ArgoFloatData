@@ -50,7 +50,7 @@ The app stores only a **compact metadata index** (a few MB of Parquet) covering 
 whole array, so search and the dossier are instant. When you open a float, its full
 profile file (`<wmo>_Sprof.nc` for BGC, `<wmo>_prof.nc` for core/deep) is **fetched
 live from the Argo GDAC** and cached — the ~150–250 GB of bulk data never has to be
-hosted. A weekly [GitHub Action](.github/workflows/refresh-metadata.yml) refreshes
+hosted. A daily [GitHub Action](.github/workflows/refresh-metadata.yml) refreshes
 the index so newly deployed floats appear automatically.
 
 ```
@@ -106,7 +106,7 @@ the on-demand fetch at a mirror (e.g. the AWS Open Data S3 mirror) instead of If
 Deployed free on **Streamlit Community Cloud** from this repo (main file
 `argo_dashboard.py`); the [`docs/`](docs/) landing page is served by GitHub Pages. No
 secrets required — optional env vars: `ARGO_GDAC` (data mirror) and `ARGO_ISSUES_URL`
-(bug-report link). The weekly workflow keeps the index fresh and Streamlit redeploys
+(bug-report link). The daily workflow keeps the index fresh and Streamlit redeploys
 on each push.
 
 ## Data API
@@ -125,14 +125,14 @@ WHERE sensor_model = 'SBE61';
 ```
 
 Files: `api/floats.parquet`, `api/sensors.parquet`, `api/floats.json` (each row
-carries its GDAC `data_url`), `api/index.json` (manifest). Regenerated weekly by
+carries its GDAC `data_url`), `api/index.json` (manifest). Regenerated daily by
 `build_api.py`. Profile data itself is fetched from the GDAC — this API indexes it,
 it doesn't rehost it.
 
 ## Good to know
 
 - **The GDAC is mutable** — delayed-mode QC and reprocessing rewrite old files. The
-  index refreshes weekly; for reproducible figures, pin a monthly
+  index refreshes daily; for reproducible figures, pin a monthly
   [DOI snapshot](https://doi.org/10.17882/42182).
 - **Synthetic/physical profiles, not raw counts.** Sprof/prof are QC'd, science-ready
   profiles; intermediate raw sensor signals live in the B-files (not used here).
@@ -153,7 +153,7 @@ it doesn't rehost it.
 | `build_api.py` | publish the crosswalk as the `docs/api/` data API |
 | `argo_local/*.parquet` | the committed metadata index (search + dossier) |
 | `docs/` | GitHub Pages landing page + `api.html` docs + `api/` data files |
-| `.github/workflows/refresh-metadata.yml` | weekly index + API auto-refresh |
+| `.github/workflows/refresh-metadata.yml` | daily index + API auto-refresh |
 
 ## Acknowledgements, data source & license
 
