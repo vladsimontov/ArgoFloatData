@@ -3,7 +3,7 @@ name: Refresh Argo metadata
 # Rebuilds the searchable float index so newly-deployed Argo floats show up.
 # Incremental: the meta.nc files are cached between runs, so each run only
 # downloads metadata for floats that are new since last time. The bulky data
-# is never stored — it's still fetched on demand by the app.
+# is never stored; it is still fetched on demand by the app.
 
 on:
   schedule:
@@ -24,10 +24,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0       # full history so the push-retry rebase below works
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -36,9 +38,9 @@ jobs:
 
       # Cache the downloaded meta.nc + index between runs. A unique key always
       # saves a fresh cache; restore-keys pulls the most recent prior one, so
-      # only NEW floats' metadata is downloaded each week.
+      # only NEW floats' metadata is downloaded each run.
       - name: Restore metadata cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: argo_local
           key: argo-meta-${{ github.run_id }}
@@ -61,11 +63,26 @@ jobs:
           git add argo_local/sensors.parquet argo_local/floats.parquet \
                   argo_local/bgc_float_index.parquet docs/api/
           if git diff --cached --quiet; then
-            echo "No new floats this run — nothing to commit."
-          else
-            git add argo_local/manifest.json
-            git commit -m "chore: daily Argo metadata refresh [skip ci]"
-            git pull --rebase origin main || true
-            git push
-            echo "Pushed refreshed index — Streamlit Cloud will redeploy."
+            echo "No new floats this run; nothing to commit."
+            exit 0
+          fi
+          git add argo_local/manifest.json
+          git commit -m "chore: daily Argo metadata refresh [skip ci]"
+          # Push, retrying against concurrent pushes to main. Our freshly-built
+          # files are the source of truth, so on a rebase conflict we keep ours.
+          # (In a rebase, "theirs" is the commit being replayed, i.e. this one.)
+          pushed=0
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "Pushed refreshed index; Streamlit Cloud will redeploy."
+              pushed=1; break
+            fi
+            echo "Push rejected (main moved); rebasing onto latest (attempt $attempt)."
+            git fetch origin main
+            git rebase -X theirs FETCH_HEAD || { git rebase --abort; break; }
+            sleep 3
+          done
+          if [ "$pushed" != "1" ]; then
+            echo "Could not push after 5 attempts."
+            exit 1
           fi
