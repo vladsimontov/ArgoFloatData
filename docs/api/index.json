@@ -73,6 +73,6 @@
       "rows": 75345
     }
   },
-  "license": "Argo data: CC BY 4.0 \u2014 cite https://doi.org/10.17882/42182",
-  "name": "Argo Float Data Explorer \u2014 data API"
+  "license": "Argo data: CC BY 4.0, cite https://doi.org/10.17882/42182",
+  "name": "Argo Float Data Explorer: data API"
 }

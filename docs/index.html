@@ -11,7 +11,7 @@
 <!-- ============================================================= -->
 
 <title>Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles</title>
-<meta name="description" content="Find an Argo float by its CTD/sensor serial number, model, WMO, or region. Search the entire array — BGC, core, and Deep Argo (SBE61 6000 m) — and visualize profiles, depth–time sections, T–S diagrams, and trends, with data streamed live from the Argo GDAC.">
+<meta name="description" content="Find an Argo float by its CTD/sensor serial number, model, WMO, or region. Search the entire array of BGC, core, and Deep Argo (SBE61 6000 m) floats, and visualize profiles, depth-time sections, T-S diagrams, and trends, with data streamed live from the Argo GDAC.">
 <meta name="keywords" content="Argo, Argo floats, BGC-Argo, Deep Argo, SBE61, core Argo, ocean float data, oceanography, temperature salinity profiles, ocean profiling floats, GDAC, TEOS-10, ocean observing, float serial number, WMO, biogeochemical Argo, ocean data visualization">
 <meta name="author" content="Vlad Simontov">
 <link rel="canonical" href="https://vladsimontov.github.io/ArgoFloatData/">
@@ -21,12 +21,12 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Argo Float Data Explorer">
 <meta property="og:title" content="Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles">
-<meta property="og:description" content="Find an Argo float by its CTD/sensor serial number, model, or WMO. Search the entire array — BGC, core, and Deep Argo (SBE61 6000 m) — and visualize profiles, sections, T–S diagrams, and trends.">
+<meta property="og:description" content="Find an Argo float by its CTD/sensor serial number, model, or WMO. Search the entire array of BGC, core, and Deep Argo (SBE61 6000 m) floats, and visualize profiles, sections, T-S diagrams, and trends.">
 <meta property="og:url" content="https://vladsimontov.github.io/ArgoFloatData/">
 <meta property="og:image" content="https://vladsimontov.github.io/ArgoFloatData/og-image.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles">
-<meta name="twitter:description" content="Find an Argo float by its CTD/sensor serial number, model, or WMO — across the entire array (BGC, core, Deep Argo / SBE61 6000 m). Live data from the GDAC.">
+<meta name="twitter:description" content="Find an Argo float by its CTD/sensor serial number, model, or WMO, across the entire array (BGC, core, Deep Argo / SBE61 6000 m). Live data from the GDAC.">
 <meta name="twitter:image" content="https://vladsimontov.github.io/ArgoFloatData/og-image.png">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
@@ -37,7 +37,7 @@
   "@context": "https://schema.org",
   "@type": "WebApplication",
   "name": "Argo Float Data Explorer",
-  "description": "Search and visualize the entire Argo float array — BGC, core, and Deep Argo (SBE61 6000 m) — by sensor serial number, model, WMO, or region.",
+  "description": "Search and visualize the entire Argo float array of BGC, core, and Deep Argo (SBE61 6000 m) floats, by sensor serial number, model, WMO, or region.",
   "url": "https://argofloat.streamlit.app",
   "applicationCategory": "ScienceApplication",
   "operatingSystem": "Any (web browser)",
@@ -125,11 +125,11 @@
 <header class="hero">
   <div class="wrap">
     <h1>🌊 Argo Float Data Explorer</h1>
-    <p class="tag"><strong>Find a float by its CTD serial number</strong> — or by
-      sensor model, WMO, or region — and explore the <strong>entire Argo array</strong>:
+    <p class="tag"><strong>Find a float by its CTD serial number</strong>, or by
+      sensor model, WMO, or region, and explore the <strong>entire Argo array</strong>:
       BGC, core, and Deep&nbsp;Argo (SBE61 6000&nbsp;m).</p>
     <div class="cta-row">
-      <!-- APP_URL — confirm this matches your live Streamlit subdomain -->
+      <!-- APP_URL: confirm this matches your live Streamlit subdomain -->
       <a class="cta" href="https://argofloat.streamlit.app">Launch the app →</a>
       <a class="cta ghost" href="api.html">Data API</a>
       <a class="cta ghost" href="https://github.com/vladsimontov/ArgoFloatData">GitHub</a>
@@ -147,18 +147,18 @@
 
   <div class="preview">
     <img src="screenshot.png" width="1280" loading="lazy"
-      alt="Argo Float Data Explorer showing the trajectory of Argo float 7901065 on an interactive basemap — the float's drift track across the Black Sea, with launch and latest positions marked.">
-    <p class="cap">A float's drift track on an interactive basemap — one of several
-      tabbed views (Overview, Trajectory, Profile &amp; Trend, T–S).</p>
+      alt="Argo Float Data Explorer showing the trajectory of Argo float 7901065 on an interactive basemap, showing the float's drift track across the Black Sea, with launch and latest positions marked.">
+    <p class="cap">A float's drift track on an interactive basemap, one of several
+      tabbed views (Overview, Trajectory, Profile &amp; Trend, T-S).</p>
   </div>
 </div>
 
 <section class="wrap">
   <h2>Every Argo float, one search box</h2>
   <p class="lead">A fast, free tool for oceanographers and the curious.
-    <strong>Find an Argo float by its sensor serial number</strong> — enter a CTD
+    <strong>Find an Argo float by its sensor serial number</strong>: enter a CTD
     serial (SBE41, SBE41CP, SBE61) and see which float it belongs to, every other
-    sensor on board, where it is, and what it has measured — across the whole global
+    sensor on board, where it is, and what it has measured, across the whole global
     Argo program.</p>
   <div class="grid">
     <div class="feat"><div class="ic">🔎</div><h3>Search the whole array</h3>
@@ -168,20 +168,20 @@
         match to open it.</p></div>
     <div class="feat"><div class="ic">🛟</div><h3>BGC, Core &amp; Deep Argo</h3>
       <p>Biogeochemical (Sprof), physical core (prof), and full-depth
-        <strong>Deep&nbsp;Argo</strong> floats — including 6000&nbsp;m SBE61 Deep SOLO,
+        <strong>Deep&nbsp;Argo</strong> floats, including 6000&nbsp;m SBE61 Deep SOLO,
         Deep APEX, and Xuanwu profilers.</p></div>
     <div class="feat"><div class="ic">📈</div><h3>Rich, interactive plots</h3>
       <p>An interactive trajectory basemap, vertical profiles (raw or adjusted,
-        QC-aware), depth–time sections, temperature–salinity diagrams, and
+        QC-aware), depth-time sections, temperature-salinity diagrams, and
         per-pressure time series with trend tests.</p></div>
     <div class="feat"><div class="ic">🧪</div><h3>TEOS-10 derived quantities</h3>
       <p>Potential density σ₀, conservative temperature, mixed-layer depth, and
         apparent oxygen utilization, computed on the fly with <code>gsw</code>.</p></div>
     <div class="feat"><div class="ic">🛰️</div><h3>Always-live data</h3>
       <p>Float profiles are fetched on demand straight from the Argo
-        <strong>GDAC</strong> when you open a float — no stale local mirror.</p></div>
+        <strong>GDAC</strong> when you open a float, with no stale local mirror.</p></div>
     <div class="feat"><div class="ic">🆓</div><h3>Open &amp; free</h3>
-      <p>MIT-licensed code, built on freely available Argo data. No login, no cost —
+      <p>MIT-licensed code, built on freely available Argo data. No login, no cost,
         for everyone.</p></div>
   </div>
 </section>
@@ -190,7 +190,7 @@
   <h2>How it works</h2>
   <p class="lead">The app stores only a compact metadata index for all ~20,000 floats
     (a few megabytes), so search is instant. When you open a float, its full profile
-    dataset is streamed live from the Argo Global Data Assembly Centre and cached —
+    dataset is streamed live from the Argo Global Data Assembly Centre and cached, giving
     the best of both worlds: complete coverage without hosting hundreds of gigabytes.</p>
   <div class="cite">
     <strong>Data source &amp; citation.</strong> These data were collected and made
@@ -204,9 +204,9 @@
 </section>
 
 <section class="wrap">
-  <h2>🛰️ Free data API — for developers</h2>
+  <h2>🛰️ Free data API for developers</h2>
   <p class="lead">Query the whole array by <strong>sensor serial number</strong>,
-    model, WMO, region, or type — straight over HTTP with DuckDB or pandas. No key,
+    model, WMO, region, or type, straight over HTTP with DuckDB or pandas. No key,
     no rate limit. The serial/sensor lookup is something the GDAC, ERDDAP, and
     Argovis don't offer.</p>
   <pre style="background:#0c1a29;color:#d6e6f5;padding:16px 18px;border-radius:10px;
@@ -225,7 +225,7 @@ WHERE sensor_model = 'SBE61';</pre>
     <a href="https://argo.ucsd.edu">About Argo</a>
     <a href="https://doi.org/10.17882/42182">Argo data DOI</a>
   </div>
-  Independent, community tool — not affiliated with or endorsed by the Argo Program.
+  Independent, community tool, not affiliated with or endorsed by the Argo Program.
   Code © 2026 Vlad Simontov (MIT). Built with the help of Claude. 🌊
 </footer>
 

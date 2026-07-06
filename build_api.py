@@ -4,7 +4,7 @@ build_api.py
 ============
 Publish the crosswalk as a small static "data API" under docs/api/ so it's
 served from the (CDN-backed) GitHub Pages site and queryable over HTTP with
-DuckDB / pandas — including the serial-number / sensor lookups that the GDAC,
+DuckDB / pandas, including the serial-number / sensor lookups that the GDAC,
 ERDDAP, and Argovis don't offer.
 
 Outputs (all deterministic, so the daily refresh only commits real changes):
@@ -62,12 +62,12 @@ def main():
         return int(v) if pd.notna(v) else None
 
     manifest = {
-        "name": "Argo Float Data Explorer — data API",
+        "name": "Argo Float Data Explorer: data API",
         "description": "Search the whole Argo array by sensor serial number, "
                        "model, WMO, region, or type. Query the Parquet files "
                        "directly with DuckDB or pandas over HTTP.",
         "base_url": "https://vladsimontov.github.io/ArgoFloatData/api/",
-        "license": "Argo data: CC BY 4.0 — cite https://doi.org/10.17882/42182",
+        "license": "Argo data: CC BY 4.0, cite https://doi.org/10.17882/42182",
         "counts": {
             "floats": int(floats["wmo"].nunique()),
             "sensor_rows": int(len(sensors)),

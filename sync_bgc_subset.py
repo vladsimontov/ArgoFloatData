@@ -22,11 +22,11 @@ Honest limitations
 -------------------
 * Sprof (bgc) is the SYNTHETIC profile: QC'd/adjusted, science-ready, no raw
   intermediate signals (those live in B-files, not fetched here).
-* core prof.nc is the physical (T/S) profile — no BGC parameters.
+* core prof.nc is the physical (T/S) profile, with no BGC parameters.
 * The GDAC is mutable: delayed-mode QC rewrites old files. Re-run to refresh; pin
   a monthly DOI snapshot for reproducible figures.
 
-Tested? The bgc path is exercised; the core path was added later — VERIFY the two
+Tested? The bgc path is exercised; the core path was added later, so VERIFY the two
 GDAC constants below against the live server if a path 404s.
 """
 
@@ -234,7 +234,7 @@ def main():
     ap.add_argument("--skip-meta", action="store_true",
                     help="Don't (re)download meta files.")
     ap.add_argument("--meta-only", action="store_true",
-                    help="Download only meta.nc + build the index — no Sprof/prof "
+                    help="Download only meta.nc + build the index, no Sprof/prof "
                          "data. Floats are fetched from the GDAC on demand in the "
                          "app. Use with --dataset both --limit-floats 0 for the "
                          "full-array metadata pull.")

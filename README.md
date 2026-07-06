@@ -1,10 +1,10 @@
 # 🌊 Argo Float Data Explorer
 
-Search and visualize the **entire global Argo float array** — BGC, core, and
-Deep Argo (SBE61 6000 m) — by sensor **serial number**, model, WMO, or region.
+Search and visualize the **entire global Argo float array** of BGC, core, and
+Deep Argo (SBE61 6000 m) floats, by sensor **serial number**, model, WMO, or region.
 Look up a CTD serial like `SBE41` or `SBE61`, find the float it belongs to, every
-other sensor on board, where it's been, and what it's measured — then plot
-profiles, depth–time sections, T–S diagrams, and multi-year trends. Float data is
+other sensor on board, where it's been, and what it's measured, then plot
+profiles, depth-time sections, T-S diagrams, and multi-year trends. Float data is
 streamed **live from the Argo GDAC** on demand, so the whole ~20,000-float array is
 searchable from a repo just a few megabytes in size.
 
@@ -13,33 +13,33 @@ searchable from a repo just a few megabytes in size.
 
 > **License:** code is [MIT](LICENSE); Argo data (the bundled metadata index and any
 > profiles the app retrieves) is © the International Argo Program under
-> [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) — see
+> [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), see
 > [Acknowledgements](#acknowledgements-data-source--license).
 
 ---
 
 ## What it does
 
-- **Find any float** — search **20,321 floats** by CTD/sensor serial number, sensor
+- **Find any float:** search **20,321 floats** by CTD/sensor serial number, sensor
   model (SBE41, SBE41CP, **SBE61**, optodes, ECO, SUNA…), WMO number, or region.
   Click a match to open it; a serial search adds a highlighted **matched on** column
   showing exactly which sensor + serial (or float serial) triggered the hit. Argo has
   no native serial→float index, so this builds one from every float's `meta.nc`.
-- **Float dossier** — a structured **Identity / Deployment / Project** panel: float
+- **Float dossier**, a structured **Identity / Deployment / Project** panel: float
   serial, WMO, DAC, platform type/maker, **all sensors**, measurands on board,
   **days deployed**, last position, an approximate **region** (climate band + ocean
   basin), and which data file backs it (BGC vs core).
-- **Interactive plots**, grouped into tabs (Overview · Trajectory · Profile & Trend · T–S):
-  - **Trajectory map** — the float's drift track on an interactive **basemap**
+- **Interactive plots**, grouped into tabs (Overview · Trajectory · Profile & Trend · T-S):
+  - **Trajectory map:** the float's drift track on an interactive **basemap**
     (pydeck + Carto tiles), with launch and latest positions marked.
-  - **Vertical profiles** — real-time or `*_ADJUSTED`, QC-flag aware, colored by date.
-  - **Depth–time section** (Hovmöller) with a mixed-layer-depth overlay.
-  - **Temperature–Salinity diagram** with σ₀ density contours.
-  - **Time series at a chosen pressure** — nearest-level, colored by season, with a
-    **Sen's-slope + Mann–Kendall** trend test and optional deseasonalizing.
+  - **Vertical profiles:** real-time or `*_ADJUSTED`, QC-flag aware, colored by date.
+  - **Depth-time section** (Hovmöller) with a mixed-layer-depth overlay.
+  - **Temperature-Salinity diagram** with σ₀ density contours.
+  - **Time series at a chosen pressure:** nearest-level, colored by season, with a
+    **Sen's-slope + Mann-Kendall** trend test and optional deseasonalizing.
 - **TEOS-10 derived fields** (via `gsw`): potential density σ₀, conservative &
   potential temperature, absolute salinity, apparent oxygen utilization, and mixed
-  layer depth — all computed on the fly.
+  layer depth, all computed on the fly.
 - **Download** any parameter as CSV, or the full float as NetCDF.
 - Every plot is stamped with the float's **WMO + latest-profile date** so a chart is
   never mistaken for another float or a stale view.
@@ -49,7 +49,7 @@ searchable from a repo just a few megabytes in size.
 The app stores only a **compact metadata index** (a few MB of Parquet) covering the
 whole array, so search and the dossier are instant. When you open a float, its full
 profile file (`<wmo>_Sprof.nc` for BGC, `<wmo>_prof.nc` for core/deep) is **fetched
-live from the Argo GDAC** and cached — the ~150–250 GB of bulk data never has to be
+live from the Argo GDAC** and cached, so the ~150-250 GB of bulk data never has to be
 hosted. A daily [GitHub Action](.github/workflows/refresh-metadata.yml) refreshes
 the index so newly deployed floats appear automatically.
 
@@ -65,7 +65,7 @@ meta.nc (all floats)  ──build_crosswalk──▶  sensors/floats.parquet  �
 |---|---|---|---|
 | **BGC** | `Sprof.nc` | biogeochemical (O₂, chl-a, nitrate, pH, irradiance…) synthetic profiles | ~2,900 |
 | **Core** | `prof.nc` | physical temperature/salinity floats | ~17,400 |
-| **Deep** | `prof.nc` | Deep Argo (4000–6000 m); SBE61 6000 m = Deep SOLO / APEX / Xuanwu | ~580 (≈350 SBE61) |
+| **Deep** | `prof.nc` | Deep Argo (4000-6000 m); SBE61 6000 m = Deep SOLO / APEX / Xuanwu | ~580 (≈350 SBE61) |
 
 All physical plots work on every float; BGC-only parameters simply stay empty for
 core/deep floats.
@@ -87,7 +87,7 @@ the GDAC the first time you open it.
 The pipeline is `sync → build_crosswalk → run`:
 
 ```bash
-# Full array, metadata only (~1 GB one-time meta download, resumable) — recommended
+# Full array, metadata only (~1 GB one-time meta download, resumable), recommended
 python sync_bgc_subset.py --root ./argo_local --dataset both --meta-only --limit-floats 0
 python build_crosswalk.py  --root ./argo_local
 
@@ -105,14 +105,14 @@ the on-demand fetch at a mirror (e.g. the AWS Open Data S3 mirror) instead of If
 
 Deployed free on **Streamlit Community Cloud** from this repo (main file
 `argo_dashboard.py`); the [`docs/`](docs/) landing page is served by GitHub Pages. No
-secrets required — optional env vars: `ARGO_GDAC` (data mirror) and `ARGO_ISSUES_URL`
+secrets required; optional env vars: `ARGO_GDAC` (data mirror) and `ARGO_ISSUES_URL`
 (bug-report link). The daily workflow keeps the index fresh and Streamlit redeploys
 on each push.
 
 ## Data API
 
 A free, no-key HTTP data API is published under
-[`/api/`](https://vladsimontov.github.io/ArgoFloatData/api/) — query the whole array
+[`/api/`](https://vladsimontov.github.io/ArgoFloatData/api/) to query the whole array
 by **sensor serial number**, model, WMO, region, or type with DuckDB or pandas (the
 serial/sensor lookup is something the GDAC, ERDDAP, and Argovis don't offer). Docs:
 **https://vladsimontov.github.io/ArgoFloatData/api.html**
@@ -126,20 +126,20 @@ WHERE sensor_model = 'SBE61';
 
 Files: `api/floats.parquet`, `api/sensors.parquet`, `api/floats.json` (each row
 carries its GDAC `data_url`), `api/index.json` (manifest). Regenerated daily by
-`build_api.py`. Profile data itself is fetched from the GDAC — this API indexes it,
+`build_api.py`. Profile data itself is fetched from the GDAC; this API indexes it,
 it doesn't rehost it.
 
 ## Good to know
 
-- **The GDAC is mutable** — delayed-mode QC and reprocessing rewrite old files. The
+- **The GDAC is mutable:** delayed-mode QC and reprocessing rewrite old files. The
   index refreshes daily; for reproducible figures, pin a monthly
   [DOI snapshot](https://doi.org/10.17882/42182).
 - **Synthetic/physical profiles, not raw counts.** Sprof/prof are QC'd, science-ready
   profiles; intermediate raw sensor signals live in the B-files (not used here).
-- **Serial matching is fuzzy** — formats vary by DAC (padding, prefixes, `SBE41` vs
+- **Serial matching is fuzzy:** formats vary by DAC (padding, prefixes, `SBE41` vs
   `SBE41CP`). Search is case-insensitive substring; confirm a hit with model + maker.
 - **Defaults encode QC guidance, not a fix.** The UI prefers `*_ADJUSTED`, keeps QC
-  flags {1,2,5,8}, and shows the data mode (R/A/D) — it makes the data state legible,
+  flags {1,2,5,8}, and shows the data mode (R/A/D); it makes the data state legible,
   it doesn't correct sensor drift. Derived quantities are **not official Argo
   products**.
 
@@ -157,8 +157,8 @@ it doesn't rehost it.
 
 ## Acknowledgements, data source & license
 
-Thank you to the **International Argo Program** and the ~30 nations — their
-governments, agencies, engineers, and scientists — who fund, build, deploy, quality-
+Thank you to the **International Argo Program** and the ~30 nations, their
+governments, agencies, engineers, and scientists, who fund, build, deploy, quality-
 control, and *freely* share these floats with the world. 🌊
 
 > These data were collected and made freely available by the International Argo
@@ -181,4 +181,4 @@ AOU, absolute/conservative properties, trends) that are **not official Argo
 products**. Data are retrieved from the Argo GDAC.
 
 *Built with the help of [Claude](https://claude.ai) (Anthropic). An independent,
-community tool — not affiliated with or endorsed by the Argo Program.*
+community tool, not affiliated with or endorsed by the Argo Program.*

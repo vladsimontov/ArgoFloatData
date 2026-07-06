@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-argo_dashboard.py  —  BGC-Argo explorer
+argo_dashboard.py: BGC-Argo explorer
 =======================================
 Run:  streamlit run argo_dashboard.py -- --root ./argo_local
 
@@ -514,7 +514,7 @@ c2.metric("BGC floats", f"{n_bgc:,}", help="Carry biogeochemical sensors (Sprof)
 c3.metric("Core floats", f"{n_core:,}", help="Physical T/S floats (prof.nc).")
 c4.metric("Deep floats", f"{n_deep:,}",
           help=f"PLATFORM_FAMILY = FLOAT_DEEP · {n_sbe61:,} with SBE61 (6000 m).")
-c5.metric("Last synced (UTC)", mani.get("synced_utc", "—"),
+c5.metric("Last synced (UTC)", mani.get("synced_utc", "-"),
           help="When the metadata index was last refreshed.")
 st.caption("Float data is fetched on demand from the Argo GDAC when you open a float"
            " · the GDAC is mutable (delayed-mode QC rewrites history), so the index "
@@ -523,7 +523,7 @@ st.caption("Float data is fetched on demand from the Argo GDAC when you open a f
 # ---- acknowledgements · data source · license (always visible) ----
 with st.expander("Acknowledgements | Data Source | License", expanded=False):
     st.markdown("""
-**Thank you to Argo — and to the people and nations who make it possible.**
+**Thank you to Argo, and to the people and nations who make it possible.**
 
 Every profile in this tool exists because of the **International Argo Program** and
 the ~30 nations: their governments, agencies, engineers, and scientists who fund,
@@ -547,14 +547,14 @@ Italy (OGS), Japan (JAMSTEC / JMA), South Korea (KMA / KIOST), the United Kingdo
 (Met Office / BODC), the United States (NOAA / SIO), **Euro-Argo ERIC**, and every other
 nation and government contributing to Argo. The full float array is a shared gift.
 
-**License** — Argo data are freely available under
+**License:** Argo data are freely available under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). This tool applies QC
 filtering and computes derived quantities (TEOS-10 density, mixed-layer depth,
 apparent oxygen utilization, absolute/conservative properties, trends) that are
 **not official Argo products**. Data are retrieved from the Argo GDAC.
 
 *Built with the help of [Claude](https://claude.ai) (Anthropic). An independent,
-community tool — not affiliated with or endorsed by the Argo Program.*
+community tool, not affiliated with or endorsed by the Argo Program.*
 """)
     st.markdown(
         f"**🐛 Found a bug, or have a request?** "
@@ -575,7 +575,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption(
     f"🐛 [Report a bug / request a feature]({NEW_ISSUE_URL})")
 st.sidebar.caption(
-    "🌊🌊🌊 Data: **International Argo Program** & its member nations — "
+    "🌊🌊🌊 Data: **International Argo Program** & its member nations, "
     "freely shared under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). "
     "[doi.org/10.17882/42182](https://doi.org/10.17882/42182). "
     "With thanks. See **Acknowledgements** up top.")
@@ -600,7 +600,7 @@ st.subheader("Matches")
 
 # compact float-type label per WMO (BGC / Core, flagged Deep) for the table
 def _float_type(dk, deep):
-    base = "BGC" if dk == "bgc" else "Core" if dk == "core" else "—"
+    base = "BGC" if dk == "bgc" else "Core" if dk == "core" else "-"
     return f"{base} · Deep" if deep else base
 type_by_wmo = {}
 if {"data_kind", "is_deep"}.issubset(floats.columns):
@@ -614,8 +614,8 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
         "Show unique floats only", value=True,
         help="On: one row per float (WMO), with how many sensors matched and their "
              "models. Off: one row per matching sensor.")
-    # When searching by serial, label what triggered each match — the sensor and its
-    # serial (or the float serial) — so the hit is visible even in the grouped view.
+    # When searching by serial, label what triggered each match (the sensor and its
+    # serial, or the float serial) so the hit is visible even in the grouped view.
     serial_hit = bool(serial_q.strip())
     if serial_hit:
         _sq = serial_q.strip().lower()
@@ -642,7 +642,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
         if serial_hit:
             cols.append("matched_on")
         show = hits[cols].reset_index(drop=True)
-    show.insert(1, "type", show["wmo"].astype(str).map(type_by_wmo).fillna("—"))
+    show.insert(1, "type", show["wmo"].astype(str).map(type_by_wmo).fillna("-"))
     if serial_hit:
         show.insert(2, "matched_on", show.pop("matched_on"))   # prominent: right after type
     cap = "Select a row's checkbox (far left) to open that float ↓"
@@ -726,7 +726,7 @@ if not has_local:
         suffix = "_Sprof.nc" if str(frow.get("data_kind")) == "bgc" else "_prof.nc"
         rel = f"dac/{frow.get('dac')}/{sel_wmo}/{sel_wmo}{suffix}"
     st.info(f"Fetching this float's data from the Argo GDAC on demand "
-            f"(`{os.path.basename(rel)}`) — cached after the first load.")
+            f"(`{os.path.basename(rel)}`), cached after the first load.")
     with st.spinner(f"Downloading {os.path.basename(rel)} from the GDAC…"):
         ok = fetch_from_gdac(rel)
     if not ok:
@@ -767,7 +767,7 @@ def _axis_label(var):
 
 # ---- per-float views as tabs (sidebar search + results table stay global) ----
 tab_over, tab_traj, tab_prof, tab_ts = st.tabs(
-    ["Overview", "Trajectory", "Profile & Trend", "T–S"])
+    ["Overview", "Trajectory", "Profile & Trend", "T-S"])
 
 # ===================== Overview: metadata + sensors + calibration =====================
 with tab_over:
@@ -784,11 +784,11 @@ with tab_over:
             ok = np.isfinite(la) & np.isfinite(lo)
             if ok.any():
                 llat, llon = float(la[ok][-1]), float(lo[ok][-1])
-        deployed = "—"
+        deployed = "-"
         if pd.notna(launch) and pd.notna(last) and last >= launch:
             dd = (last - launch).days
             deployed = f"{dd:,} days (~{dd / 365.25:.1f} yr)"
-        last_profile = f"{last:%Y-%m-%d}" if pd.notna(last) else "—"
+        last_profile = f"{last:%Y-%m-%d}" if pd.notna(last) else "-"
         if pd.notna(llat) and pd.notna(llon):
             lon_n = ((float(llon) + 180) % 360) - 180
             position = (f"{abs(float(llat)):.2f}°{'N' if llat >= 0 else 'S'}, "
@@ -796,16 +796,16 @@ with tab_over:
             region = (f"{climate_band(float(llat))} · "
                       f"{ocean_basin(float(llat), float(llon))}")
         else:
-            position, region = "—", "—"
+            position, region = "-", "-"
         _kind = frow.get("data_kind")
-        data_file = ({"core": "core (prof.nc — physical T/S)",
-                      "bgc": "BGC (Sprof.nc — synthetic)"}.get(_kind)
-                     if pd.notna(_kind) else "—")
+        data_file = ({"core": "core (prof.nc, physical T/S)",
+                      "bgc": "BGC (Sprof.nc, synthetic)"}.get(_kind)
+                     if pd.notna(_kind) else "-")
 
         def _kv(pairs):
             def _v(x):
                 s = "" if x is None else str(x).strip()
-                return s if s and s.lower() != "nan" else "—"
+                return s if s and s.lower() != "nan" else "-"
             return "\n".join(f"**{k}:** {_v(v)}  " for k, v in pairs)
 
         oc1, oc2, oc3 = st.columns(3)
@@ -852,7 +852,7 @@ with tab_over:
             st.write("_(not listed in index/meta; read from the data file)_")
 
     with st.expander("🔬 Calibration coefficients (all measurands)", expanded=False):
-        st.caption("How each parameter is calibrated — factory / pre-deployment sensor "
+        st.caption("How each parameter is calibrated: factory / pre-deployment sensor "
                    "coefficients (from meta.nc) that convert raw counts to physical "
                    "units, and delayed-mode (DMQC) adjustments (from the profile file). "
                    "Blank where a float doesn't report them.")
@@ -887,7 +887,7 @@ with tab_traj:
                                        if "CYCLE_NUMBER" in ds
                                        else np.arange(len(lat)))})
         traj = traj.dropna(subset=["lat", "lon"]).reset_index(drop=True)
-        st.markdown(f"**{float_tag} — trajectory**")
+        st.markdown(f"**{float_tag} · trajectory**")
         path_layer = pdk.Layer(
             "PathLayer",
             data=pd.DataFrame({"path": [traj[["lon", "lat"]].values.tolist()]}),
@@ -944,10 +944,10 @@ with tab_prof:
     view = pc2.radio(
         "Data view", ["Real-time (R)", "QC-filtered", "Adjusted (A/D)"],
         index=2, horizontal=True,
-        help="**Real-time (R)** — the reported value, no adjustment (shown whatever the "
+        help="**Real-time (R)**: the reported value, no adjustment (shown whatever the "
              "parameter's data mode). "
-             "**QC-filtered** — the reported value, keeping only good QC flags {1,2,5,8}. "
-             "**Adjusted (A/D)** — delayed-mode/adjusted, science-ready values (QC-filtered). "
+             "**QC-filtered**: the reported value, keeping only good QC flags {1,2,5,8}. "
+             "**Adjusted (A/D)**: delayed-mode/adjusted, science-ready values (QC-filtered). "
              "The parameter's actual data mode (R/A/D) is shown just below.")
     adjusted = view.startswith("Adjusted")
     apply_qc = view.startswith(("QC", "Adjusted"))
@@ -962,8 +962,8 @@ with tab_prof:
     else:
         st.caption(f"Data mode for {param}: {data_mode_for(ds, param)}")
         if df.empty:
-            st.warning("No finite points after selection. Try a different **Data view** "
-                       "— this parameter may only exist as real-time values (no "
+            st.warning("No finite points after selection. Try a different **Data view**, "
+                       "since this parameter may only exist as real-time values (no "
                        "QC-passing or adjusted values) for this float.")
         else:
             vlabel, plabel = _axis_label(vcol), _axis_label(pcol)
@@ -992,7 +992,7 @@ with tab_prof:
             fig.update_xaxes(title=vlabel)
             fig.update_yaxes(autorange="reversed", title=plabel)   # depth downward
             fig.update_layout(height=560)
-            _titled(fig, f"{float_tag} — {param} profile")
+            _titled(fig, f"{float_tag} · {param} profile")
             st.plotly_chart(fig, width="stretch")
 
             d1, d2 = st.columns(2)
@@ -1006,11 +1006,11 @@ with tab_prof:
                                file_name=os.path.basename(_orig_path),
                                mime="application/x-netcdf")
 
-# ======== Profile & Trend (cont.): depth–time section (measurand-driven) ========
+# ======== Profile & Trend (cont.): depth-time section (measurand-driven) ========
 with tab_prof:          # re-enter to append the section, after the profile, before the trend
     if param and not df.empty:
         st.markdown("---")
-        st.subheader(f"{param} depth–time section")
+        st.subheader(f"{param} depth-time section")
         sec = section_grid(ds, param, adjusted, apply_qc)
         if sec is None:
             st.info("Not enough profiles/time info to build a section.")
@@ -1034,14 +1034,14 @@ with tab_prof:          # re-enter to append the section, after the profile, bef
             fig_sec.update_layout(height=440, xaxis_title="time",
                                   margin=dict(l=0, r=0, t=10, b=0),
                                   legend=dict(orientation="h", y=1.02))
-            _titled(fig_sec, f"{float_tag} — {param} depth–time section")
+            _titled(fig_sec, f"{float_tag} · {param} depth-time section")
             st.plotly_chart(fig_sec, width="stretch")
             st.caption("Each profile linearly interpolated onto a common pressure "
                        "grid. White dotted line = mixed-layer depth (where computed).")
 
-# ===================== T–S diagram (parameter-independent) =====================
+# ===================== T-S diagram (parameter-independent) =====================
 with tab_ts:
-    st.subheader("Temperature–Salinity diagram")
+    st.subheader("Temperature-Salinity diagram")
     tsf = ts_diagram_frame(ds)
     if tsf is None or tsf[0].empty:
         st.info("Salinity/temperature not available for a T-S diagram.")
@@ -1074,7 +1074,7 @@ with tab_ts:
         fig_ts_d.update_layout(
             height=520, xaxis_title=f"{xn} [{xu}]", yaxis_title=f"{yn} [{yu}]",
             margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
-        _titled(fig_ts_d, f"{float_tag} — T–S diagram")
+        _titled(fig_ts_d, f"{float_tag} · T-S diagram")
         st.plotly_chart(fig_ts_d, width="stretch")
         st.caption("Grey contours = potential density σ₀ (kg/m³); points colored "
                    "by pressure. Water masses cluster along isopycnals."
@@ -1170,7 +1170,7 @@ with tab_prof:          # re-enter to append the trend to the Profile & Trend ta
             fig_ts.update_layout(height=460, xaxis_title="time",
                                  yaxis_title=ylab, legend_title="season",
                                  margin=dict(l=0, r=0, t=10, b=0))
-            _titled(fig_ts, f"{float_tag} — {param} at {target_p:g} dbar")
+            _titled(fig_ts, f"{float_tag} · {param} at {target_p:g} dbar")
             st.plotly_chart(fig_ts, width="stretch")
 
             if res and np.isfinite(res["sen"]):
@@ -1192,7 +1192,7 @@ with tab_prof:          # re-enter to append the trend to the Profile & Trend ta
                        "Turn on deseasonalize to remove the annual cycle first."))
             st.caption(
                 f"{len(near)} profiles · nearest-level pressures "
-                f"{near['pres'].min():.1f}–{near['pres'].max():.1f} dbar "
+                f"{near['pres'].min():.1f}-{near['pres'].max():.1f} dbar "
                 f"(target {target_p:g}) · {hemi}-hemisphere meteorological seasons.")
             st.download_button(
                 "Download time series (CSV)",
