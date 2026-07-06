@@ -1200,10 +1200,30 @@ with tab_prof:          # re-enter to append the trend to the Profile & Trend ta
                        "significant (p<0.05)" if p >= 0.01 else
                        "highly significant (p<0.01)")
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Sen's slope", f"{res['sen']:+.3g} {units or ''}/yr")
+                m1.metric("Sen's slope", f"{res['sen']:+.3g} {units or ''}/yr",
+                          help="How big the trend is, in units per year. It is the "
+                               "**median** of the slopes between every pair of points, "
+                               "so a few bad or spiky samples barely move it (unlike "
+                               "ordinary linear regression). This is the *how much* "
+                               "number. Check the Mann-Kendall p to see if it is real.")
                 m2.metric("Mann-Kendall p",
-                          "n/a" if not np.isfinite(p) else f"{p:.3g}")
-                m3.metric("Trend", sig)
+                          "n/a" if not np.isfinite(p) else f"{p:.3g}",
+                          help="Whether the series really trends one way or is just "
+                               "noise. This non-parametric test compares every pair of "
+                               "points and counts how often later values exceed earlier "
+                               "ones, assuming nothing about the data's distribution and "
+                               "resisting outliers (which suits messy ocean data). "
+                               "**p < 0.05** means the trend is unlikely to be chance; "
+                               "**p >= 0.05** means it could just be noise. This is the "
+                               "*is it real* number.")
+                m3.metric("Trend", sig,
+                          help="The plain verdict from the p-value: significant "
+                               "(p<0.05), highly significant (p<0.01), or not "
+                               "significant (p>=0.05). If it says not significant, the "
+                               "Sen's slope could easily be noise, so do not over-read "
+                               "it. Note: in the Real-time or Raw view, uncorrected "
+                               "sensor drift can itself look like a trend; the Adjusted "
+                               "view guards against that.")
                 st.caption(
                     f"n={res['n']} profiles · Sen's slope = median pairwise rate "
                     "(outlier-robust); Mann-Kendall tests for a monotonic trend. "
