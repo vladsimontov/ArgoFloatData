@@ -249,6 +249,59 @@ def _flag_str(x):
     return str(x).strip()
 
 
+def qc_summary(ds):
+    """Per-parameter QC-flag breakdown from the profile file's <PARAM>_QC arrays.
+    Returns (per-parameter DataFrame, dict of per-cycle location/time QC)."""
+    import collections
+    valid = set("0123458")            # real measurements; excludes 9 (missing/padding)
+    good = set("1258")                # flags counted as usable
+    grades = set("ABCDEF")            # per-profile grade scale (Table 2a)
+
+    def counts(arr, keep):
+        a = np.asarray(arr).ravel()
+        if a.dtype.kind == "S":
+            a = np.char.strip(np.char.decode(a, "ascii", "ignore"))
+        elif a.dtype.kind in ("U", "O"):
+            a = np.array([_flag_str(x) for x in a])
+        else:
+            a = a.astype(str)
+        return collections.Counter(x for x in a.tolist() if x in keep)
+
+    rows = []
+    for v in ds.data_vars:
+        if not v.endswith("_QC") or v.endswith("_ADJUSTED_QC"):
+            continue
+        base = v[:-3]
+        if base.startswith("PROFILE_") or v in ("JULD_QC", "POSITION_QC"):
+            continue
+        c = counts(ds[v].values, valid)
+        n = sum(c.values())
+        if not n:
+            continue
+        n3, n4 = c.get("3", 0), c.get("4", 0)
+        gr = ds.get(f"PROFILE_{base}_QC")
+        g = counts(gr.values, grades) if gr is not None else {}
+        rows.append({
+            "parameter": base,
+            "measurements": n,
+            "good %": round(100 * sum(c.get(k, 0) for k in good) / n, 1),
+            "questionable %": round(100 * n3 / n, 1),
+            "bad %": round(100 * n4 / n, 1),
+            "flagged (3+4)": n3 + n4,
+            "cycle grades": " ".join(f"{k}:{g[k]}" for k in "ABCDEF" if g.get(k)),
+        })
+    df = (pd.DataFrame(rows).sort_values("flagged (3+4)", ascending=False)
+          .reset_index(drop=True)) if rows else pd.DataFrame()
+    pos = {}
+    for k, lbl in (("POSITION_QC", "Position"), ("JULD_QC", "Time")):
+        if k in ds:
+            cc = counts(ds[k].values, valid)
+            t = sum(cc.values())
+            if t:
+                pos[lbl] = (sum(cc.get(x, 0) for x in good), t)
+    return df, pos
+
+
 def _pick(ds, base, adjusted):
     """Choose <base>_ADJUSTED if requested & usable, else <base>."""
     adj = f"{base}_ADJUSTED"
@@ -878,6 +931,24 @@ with tab_over:
             st.write(", ".join(measurands))
         else:
             st.write("_(not listed in index/meta; read from the data file)_")
+
+    st.markdown("---")
+    st.markdown("**Data quality (QC flags)**")
+    qc_df, qc_pos = qc_summary(ds)
+    if qc_df.empty:
+        st.caption("No QC flags are reported in this float's file.")
+    else:
+        st.caption("Argo flags every measurement: 1 good, 2 probably good, 3 probably "
+                   "bad, 4 bad, 5 changed, 8 estimated, 0 not assessed. **good %** "
+                   "counts flags 1/2/5/8, **questionable %** is flag 3, **bad %** is "
+                   "flag 4 (any remainder is flag 0, not assessed). **cycle grades** "
+                   "grade each cycle by fraction of good data (A = 100%, B = 75 to "
+                   "100%, down to F = 0%). These are the reported flags; delayed-mode "
+                   "QC may refine them.")
+        st.dataframe(qc_df, width="stretch", hide_index=True)
+        if qc_pos:
+            bits = [f"{lbl} {g}/{t} cycles good" for lbl, (g, t) in qc_pos.items()]
+            st.caption("Per-cycle location and time QC: " + ", ".join(bits) + ".")
 
     with st.expander("🔬 Calibration coefficients (all measurands)", expanded=False):
         st.caption("How each parameter is calibrated: factory / pre-deployment sensor "
