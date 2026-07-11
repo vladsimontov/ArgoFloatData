@@ -869,9 +869,14 @@ def _axis_label(var):
 _OVL_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd"]   # T blue, S red, O2 green, +
 
 
-def _median_profile(sub, nbins=140):
-    """Median value at each pressure bin, from a tidy frame with pres/value columns.
-    Returns (bin_centers, medians) or None."""
+def _rgba(hexc, a):
+    h = hexc.lstrip("#")
+    return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{a})"
+
+
+def _stat_profile(sub, nbins=140):
+    """Mean and standard deviation at each pressure bin, from a tidy frame with
+    pres/value columns. Returns (bin_centers, means, stds) or None."""
     pr = sub["pres"].to_numpy("float64")
     vv = sub["value"].to_numpy("float64")
     m = np.isfinite(pr) & np.isfinite(vv)
@@ -880,17 +885,20 @@ def _median_profile(sub, nbins=140):
         return None
     edges = np.linspace(pr.min(), pr.max(), nbins + 1)
     idx = np.clip(np.digitize(pr, edges) - 1, 0, nbins - 1)
-    med = pd.Series(vv).groupby(idx).median()
-    if len(med) < 3:
+    g = pd.Series(vv).groupby(idx)
+    mean = g.mean()
+    std = g.std().fillna(0.0)          # single-sample bins have no spread
+    if len(mean) < 3:
         return None
-    cen = (0.5 * (edges[:-1] + edges[1:]))[med.index.to_numpy()]
-    return cen, med.to_numpy()
+    cen = (0.5 * (edges[:-1] + edges[1:]))[mean.index.to_numpy()]
+    return cen, mean.to_numpy(), std.to_numpy()
 
 
-def _overlay_fig(profiles):
+def _overlay_fig(profiles, show_band=True):
     """Multi-x-axis overlay: a shared reversed pressure y-axis, one color-matched
-    x-axis per measurand (first on the bottom, the rest stacked on top).
-    profiles: list of (name, pres, values, units)."""
+    x-axis per measurand (first on the bottom, the rest stacked on top). Each entry
+    is (name, pres, mean, std, units); with show_band a shaded +/- 1 std ribbon is
+    drawn behind each mean line."""
     ntop = len(profiles) - 1
     step = 0.09
     ytop = 1.0 - step * ntop if ntop else 1.0
@@ -899,13 +907,20 @@ def _overlay_fig(profiles):
               "showlegend": False,
               "yaxis": dict(title="PRES [decibar]", autorange="reversed",
                             domain=[0.0, ytop])}
-    for i, (name, pres, val, units) in enumerate(profiles):
+    for i, (name, pres, mean, std, units) in enumerate(profiles):
         color = _OVL_COLORS[i % len(_OVL_COLORS)]
         xa = "x" if i == 0 else f"x{i + 1}"
+        if show_band and np.any(std > 0):
+            fig.add_trace(go.Scatter(
+                x=np.concatenate([mean + std, (mean - std)[::-1]]),
+                y=np.concatenate([pres, pres[::-1]]),
+                fill="toself", fillcolor=_rgba(color, 0.13), line=dict(width=0),
+                hoverinfo="skip", showlegend=False, xaxis=xa, yaxis="y"))
         fig.add_trace(go.Scatter(
-            x=val, y=pres, mode="lines", line=dict(color=color, width=2), name=name,
-            xaxis=xa, yaxis="y",
-            hovertemplate=f"{name}=%{{x:.4g}}<br>PRES=%{{y:.0f}} dbar<extra></extra>"))
+            x=mean, y=pres, mode="lines", line=dict(color=color, width=2), name=name,
+            xaxis=xa, yaxis="y", customdata=std,
+            hovertemplate=f"{name}=%{{x:.4g}} ± %{{customdata:.3g}}"
+                          "<br>PRES=%{y:.0f} dbar<extra></extra>"))
         title = f"{name} [{units}]" if units else name
         ax = dict(title=dict(text=title, font=dict(color=color, size=12)),
                   tickfont=dict(color=color, size=10), showgrid=(i == 0), zeroline=False)
@@ -1494,6 +1509,11 @@ with tab_overlay:
             max_selections=4,
             help=f"Each gets its own color and x-axis. Uses the {view} data view "
                  "(set on Profile & Trend).")
+        show_band = st.checkbox(
+            "Show ±1σ spread", value=True,
+            help="Shade each measurand to plus or minus one standard deviation across "
+                 "the selected profiles, so you can see how variable the water column "
+                 "was over that window.")
         if not measur:
             st.info("Pick one or more measurands to overlay.")
         else:
@@ -1502,16 +1522,16 @@ with tab_overlay:
                 dfm, pcol, vcol = param_long_frame(ds, m, adjusted, apply_qc)
                 if dfm.empty or "cycle" not in dfm.columns:
                     continue
-                mp = _median_profile(dfm[dfm["cycle"].between(X, Y)])
+                mp = _stat_profile(dfm[dfm["cycle"].between(X, Y)])
                 if mp is None:
                     continue
                 units = ds[vcol].attrs.get("units") if vcol in ds else None
-                profiles.append((m, mp[0], mp[1], units))
+                profiles.append((m, mp[0], mp[1], mp[2], units))
             if not profiles:
                 st.warning(f"No data for these measurands over profiles {X} to {Y}. "
                            "Try a wider range or different measurands.")
             else:
-                st.plotly_chart(_overlay_fig(profiles), width="stretch")
+                st.plotly_chart(_overlay_fig(profiles, show_band), width="stretch")
                 cn = np.asarray(ds["CYCLE_NUMBER"].values).ravel()
                 msk = np.isfinite(cn) & (cn >= X) & (cn <= Y)
                 bits = [f"Profiles {X} to {Y}"]
@@ -1528,5 +1548,6 @@ with tab_overlay:
                     if fin.any():
                         mla, mlo = float(np.median(la[fin])), float(np.median(lo[fin]))
                         bits.append(f"near {climate_band(mla)} {ocean_basin(mla, mlo)}")
-                st.caption(" · ".join(bits) + ". Lines are the median over the selected "
-                           "profiles; each measurand keeps its own color and x-axis.")
+                st.caption(" · ".join(bits) + ". Lines are the mean over the selected "
+                           "profiles, shaded to ±1 standard deviation; each measurand "
+                           "keeps its own color and x-axis.")
