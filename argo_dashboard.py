@@ -180,11 +180,15 @@ def add_derived(ds):
     return ds
 
 
-def fetch_from_gdac(rel, retries=3):
-    """Download dac/<...>.nc from the GDAC into ROOT (cached on disk). True on success."""
+def _gdac_get(rel, retries=3):
+    """Download dac/<...>.nc from the GDAC into ROOT (cached on disk). Returns one of:
+    'ok'          - present locally or downloaded now,
+    'missing'     - the server answered 4xx (e.g. 404): the file does not exist,
+    'unreachable' - network error / timeout / 5xx after retries: could not contact it.
+    The missing/unreachable split lets callers tell 'no such file' from 'no connection'."""
     dest = os.path.join(ROOT, rel)
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
-        return True
+        return "ok"
     import requests
     import time as _time
     os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -194,19 +198,24 @@ def fetch_from_gdac(rel, retries=3):
             with requests.get(url, stream=True, timeout=180,
                               headers={"User-Agent": "argo-dashboard/0.2"}) as r:
                 if 400 <= r.status_code < 500:
-                    return False   # file isn't there (e.g. 404); don't retry
-                r.raise_for_status()
+                    return "missing"   # server says the file isn't there; don't retry
+                r.raise_for_status()   # 5xx -> raise, retry below
                 tmp = dest + ".part"
                 with open(tmp, "wb") as f:
                     for chunk in r.iter_content(chunk_size=1 << 16):
                         f.write(chunk)
                 os.replace(tmp, dest)
-            return True
+            return "ok"
         except Exception:
             if i == retries - 1:
-                return False
+                return "unreachable"
             _time.sleep(1.5 * (i + 1))
-    return False
+    return "unreachable"
+
+
+def fetch_from_gdac(rel, retries=3):
+    """Download rel from the GDAC into ROOT (cached on disk). True on success."""
+    return _gdac_get(rel, retries) == "ok"
 
 
 @st.cache_data(show_spinner=True)
@@ -220,16 +229,22 @@ def load_raw(path):
     return xr.open_dataset(path, decode_times=True)
 
 
-@st.cache_data(show_spinner=False)
 def fetch_raw_profile(dac, wmo, cycle, is_bgc):
-    """Fetch one cycle's raw NetCDF: the B-file for BGC floats, else the core
-    profile file. Tries delayed-mode then real-time; returns the rel path or None."""
+    """Fetch one cycle's raw NetCDF: the B-file for BGC floats, else the core profile
+    file. Tries delayed-mode then real-time. Returns (rel, status): status is 'ok'
+    (rel is the path), 'missing' (the GDAC has no such file for this cycle), or
+    'unreachable' (could not contact the GDAC). Not cached, so a transient network
+    failure can recover on the next try; the actual download is cached on disk."""
     prefixes = ["BD", "BR"] if is_bgc else ["D", "R"]
+    status = "missing"          # all candidates answered 404 -> genuinely not there
     for p in prefixes:
         rel = f"dac/{dac}/{wmo}/profiles/{p}{wmo}_{int(cycle):03d}.nc"
-        if fetch_from_gdac(rel):
-            return rel
-    return None
+        st_ = _gdac_get(rel)
+        if st_ == "ok":
+            return rel, "ok"
+        if st_ == "unreachable":
+            status = "unreachable"   # couldn't verify -> surface as a connection issue
+    return None, status
 
 
 def read_manifest(root):
@@ -809,10 +824,15 @@ if not has_local:
     st.info(f"Fetching this float's data from the Argo GDAC on demand "
             f"(`{os.path.basename(rel)}`), cached after the first load.")
     with st.spinner(f"Downloading {os.path.basename(rel)} from the GDAC…"):
-        ok = fetch_from_gdac(rel)
-    if not ok:
-        st.error(f"Couldn't fetch `{rel}` from the GDAC. The file may not exist for "
-                 "this float (try the other data type), or the GDAC is unreachable.")
+        status = _gdac_get(rel)
+    if status == "unreachable":
+        st.error("Couldn't reach the Argo GDAC to download this float's data. This looks "
+                 "like a connection problem, not a missing file. Please try again in a "
+                 "moment.")
+        st.stop()
+    if status == "missing":
+        st.error(f"The GDAC has no data file at `{rel}` for this float. It may not have "
+                 "reported profiles yet, or its data lives under a different name.")
         st.stop()
     sprof_rel = rel
     has_local = True
@@ -1341,10 +1361,15 @@ with tab_raw:
                                      "from the GDAC, cached after the first load.")
         _kind = "B-file" if _is_bgc else "profile file"
         with st.spinner(f"Fetching cycle {sel_cyc} {_kind} from the GDAC"):
-            raw_rel = fetch_raw_profile(_dac, sel_wmo, sel_cyc, _is_bgc)
-        if not raw_rel:
-            st.warning(f"Couldn't fetch a raw file for cycle {sel_cyc}. It may not exist "
-                       "at the GDAC, or the GDAC is unreachable.")
+            raw_rel, raw_status = fetch_raw_profile(_dac, sel_wmo, sel_cyc, _is_bgc)
+        if not raw_rel and raw_status == "unreachable":
+            st.error(f"Couldn't reach the Argo GDAC to fetch cycle {sel_cyc}. This looks "
+                     "like a connection problem, not a missing file. Please try again in "
+                     "a moment.")
+        elif not raw_rel:
+            st.warning(f"No raw file exists at the GDAC for cycle {sel_cyc} of this float. "
+                       "Checked both the delayed-mode and real-time file names, and "
+                       "neither is there. Try another cycle.")
         else:
             raw_ds = load_raw(os.path.join(ROOT, raw_rel))
             _pdims = raw_ds["PRES"].dims if "PRES" in raw_ds else None
