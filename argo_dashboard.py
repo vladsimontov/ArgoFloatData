@@ -888,7 +888,7 @@ def _median_profile(sub, nbins=140):
 
 
 def _overlay_fig(profiles):
-    """SeaSave-style overlay: a shared reversed pressure y-axis, one color-matched
+    """Multi-x-axis overlay: a shared reversed pressure y-axis, one color-matched
     x-axis per measurand (first on the bottom, the rest stacked on top).
     profiles: list of (name, pres, values, units)."""
     ntop = len(profiles) - 1
@@ -1466,9 +1466,9 @@ with tab_raw:
                                            file_name=os.path.basename(raw_rel),
                                            mime="application/x-netcdf", key="raw_dl")
 
-# ===================== Overlay: SeaSave-style multi-measurand profile =====================
+# ===================== Overlay: multi-measurand profile over a cycle range =====================
 with tab_overlay:
-    st.subheader("Multi-measurand overlay (SeaSave style)")
+    st.subheader("Multi-measurand overlay")
     st.caption("Overlay measurands on one pressure axis, each with its own color-matched "
                "x-axis, over a chosen range of profiles. The float drifts, so narrowing "
                "the range isolates a region and time window. Set the range to a single "
