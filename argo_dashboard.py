@@ -866,9 +866,63 @@ def _axis_label(var):
     return f"{var} [{units}]" if units else var
 
 
+_OVL_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd"]   # T blue, S red, O2 green, +
+
+
+def _median_profile(sub, nbins=140):
+    """Median value at each pressure bin, from a tidy frame with pres/value columns.
+    Returns (bin_centers, medians) or None."""
+    pr = sub["pres"].to_numpy("float64")
+    vv = sub["value"].to_numpy("float64")
+    m = np.isfinite(pr) & np.isfinite(vv)
+    pr, vv = pr[m], vv[m]
+    if pr.size < 3 or pr.min() == pr.max():
+        return None
+    edges = np.linspace(pr.min(), pr.max(), nbins + 1)
+    idx = np.clip(np.digitize(pr, edges) - 1, 0, nbins - 1)
+    med = pd.Series(vv).groupby(idx).median()
+    if len(med) < 3:
+        return None
+    cen = (0.5 * (edges[:-1] + edges[1:]))[med.index.to_numpy()]
+    return cen, med.to_numpy()
+
+
+def _overlay_fig(profiles):
+    """SeaSave-style overlay: a shared reversed pressure y-axis, one color-matched
+    x-axis per measurand (first on the bottom, the rest stacked on top).
+    profiles: list of (name, pres, values, units)."""
+    ntop = len(profiles) - 1
+    step = 0.09
+    ytop = 1.0 - step * ntop if ntop else 1.0
+    fig = go.Figure()
+    layout = {"height": 600, "margin": dict(l=64, r=24, t=16, b=46),
+              "showlegend": False,
+              "yaxis": dict(title="PRES [decibar]", autorange="reversed",
+                            domain=[0.0, ytop])}
+    for i, (name, pres, val, units) in enumerate(profiles):
+        color = _OVL_COLORS[i % len(_OVL_COLORS)]
+        xa = "x" if i == 0 else f"x{i + 1}"
+        fig.add_trace(go.Scatter(
+            x=val, y=pres, mode="lines", line=dict(color=color, width=2), name=name,
+            xaxis=xa, yaxis="y",
+            hovertemplate=f"{name}=%{{x:.4g}}<br>PRES=%{{y:.0f}} dbar<extra></extra>"))
+        title = f"{name} [{units}]" if units else name
+        ax = dict(title=dict(text=title, font=dict(color=color, size=12)),
+                  tickfont=dict(color=color, size=10), showgrid=(i == 0), zeroline=False)
+        if i == 0:
+            ax["side"] = "bottom"
+            layout["xaxis"] = ax
+        else:
+            ax.update(overlaying="x", side="top", anchor="free",
+                      position=min(1.0, ytop + step * (i - 1) + step * 0.35))
+            layout[f"xaxis{i + 1}"] = ax
+    fig.update_layout(**layout)
+    return fig
+
+
 # ---- per-float views as tabs (sidebar search + results table stay global) ----
-tab_over, tab_traj, tab_prof, tab_ts, tab_raw = st.tabs(
-    ["Overview", "Trajectory", "Profile & Trend", "T-S", "Raw"])
+tab_over, tab_traj, tab_prof, tab_overlay, tab_ts, tab_raw = st.tabs(
+    ["Overview", "Trajectory", "Profile & Trend", "Overlay", "T-S", "Raw"])
 
 # ===================== Overview: metadata + sensors + calibration =====================
 with tab_over:
@@ -1411,3 +1465,68 @@ with tab_raw:
                         st.download_button("Download this raw cycle (NetCDF)", _f.read(),
                                            file_name=os.path.basename(raw_rel),
                                            mime="application/x-netcdf", key="raw_dl")
+
+# ===================== Overlay: SeaSave-style multi-measurand profile =====================
+with tab_overlay:
+    st.subheader("Multi-measurand overlay (SeaSave style)")
+    st.caption("Overlay measurands on one pressure axis, each with its own color-matched "
+               "x-axis, over a chosen range of profiles. The float drifts, so narrowing "
+               "the range isolates a region and time window. Set the range to a single "
+               "profile for one cast.")
+    if "CYCLE_NUMBER" not in ds:
+        st.info("This float has no cycle numbering to select a profile range.")
+    else:
+        _cyc = sorted({int(c) for c in np.asarray(ds["CYCLE_NUMBER"].values).ravel()
+                       if np.isfinite(c)})
+        cmin, cmax = _cyc[0], _cyc[-1]
+        oc1, oc2 = st.columns([1, 1])
+        if cmin < cmax:
+            X, Y = oc1.slider("Profiles (cycle range)", cmin, cmax, (cmin, cmax),
+                              help="Profile X to Profile Y. Set both to the same number "
+                                   "for a single cast.")
+        else:
+            X, Y = cmin, cmax
+            oc1.caption(f"Only cycle {cmin} is available.")
+        _ovl_def = ([p for p in ("TEMP", "PSAL", "DOXY") if p in param_opts][:3]
+                    or param_opts[:2])
+        measur = oc2.multiselect(
+            "Measurands to overlay (up to 4)", param_opts, default=_ovl_def,
+            max_selections=4,
+            help=f"Each gets its own color and x-axis. Uses the {view} data view "
+                 "(set on Profile & Trend).")
+        if not measur:
+            st.info("Pick one or more measurands to overlay.")
+        else:
+            profiles = []
+            for m in measur:
+                dfm, pcol, vcol = param_long_frame(ds, m, adjusted, apply_qc)
+                if dfm.empty or "cycle" not in dfm.columns:
+                    continue
+                mp = _median_profile(dfm[dfm["cycle"].between(X, Y)])
+                if mp is None:
+                    continue
+                units = ds[vcol].attrs.get("units") if vcol in ds else None
+                profiles.append((m, mp[0], mp[1], units))
+            if not profiles:
+                st.warning(f"No data for these measurands over profiles {X} to {Y}. "
+                           "Try a wider range or different measurands.")
+            else:
+                st.plotly_chart(_overlay_fig(profiles), width="stretch")
+                cn = np.asarray(ds["CYCLE_NUMBER"].values).ravel()
+                msk = np.isfinite(cn) & (cn >= X) & (cn <= Y)
+                bits = [f"Profiles {X} to {Y}"]
+                if "JULD" in ds:
+                    jt = pd.to_datetime(
+                        pd.Series(np.asarray(ds["JULD"].values).ravel()[msk]),
+                        errors="coerce").dropna()
+                    if len(jt):
+                        bits.append(f"{jt.min():%Y-%m-%d} to {jt.max():%Y-%m-%d}")
+                if "LATITUDE" in ds and "LONGITUDE" in ds:
+                    la = np.asarray(ds["LATITUDE"].values).ravel()[msk]
+                    lo = np.asarray(ds["LONGITUDE"].values).ravel()[msk]
+                    fin = np.isfinite(la) & np.isfinite(lo)
+                    if fin.any():
+                        mla, mlo = float(np.median(la[fin])), float(np.median(lo[fin]))
+                        bits.append(f"near {climate_band(mla)} {ocean_basin(mla, mlo)}")
+                st.caption(" · ".join(bits) + ". Lines are the median over the selected "
+                           "profiles; each measurand keeps its own color and x-axis.")
