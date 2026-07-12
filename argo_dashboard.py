@@ -915,10 +915,15 @@ def _overlay_fig(profiles, show_band=True):
     is (name, pres, mean, std, units); with show_band a shaded +/- 1 std ribbon is
     drawn behind each mean line."""
     ntop = len(profiles) - 1
-    step = 0.09
-    ytop = 1.0 - step * ntop if ntop else 1.0
+    # Each stacked top axis needs a fixed vertical band for its title + tick
+    # labels. Grow the figure by a band per top axis (rather than cramming them
+    # into a fixed height) so titles never smear into the neighbouring ticks.
+    plot_px, band_px, head_px = 560, 88, 44   # plot area, per-axis band, top headroom
+    height = plot_px + (band_px * ntop + head_px if ntop else 0)
+    step = band_px / height if ntop else 0.0
+    ytop = plot_px / height if ntop else 1.0
     fig = go.Figure()
-    layout = {"height": 600, "margin": dict(l=64, r=24, t=16, b=46),
+    layout = {"height": height, "margin": dict(l=64, r=24, t=10, b=46),
               "showlegend": False,
               "yaxis": dict(title="PRES [decibar]", autorange="reversed",
                             domain=[0.0, ytop])}
@@ -944,7 +949,7 @@ def _overlay_fig(profiles, show_band=True):
             layout["xaxis"] = ax
         else:
             ax.update(overlaying="x", side="top", anchor="free",
-                      position=min(1.0, ytop + step * (i - 1) + step * 0.35))
+                      position=min(1.0, ytop + step * (i - 1) + step * 0.18))
             layout[f"xaxis{i + 1}"] = ax
     fig.update_layout(**layout)
     return fig
