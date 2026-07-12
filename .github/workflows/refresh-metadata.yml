@@ -40,7 +40,7 @@ jobs:
       # saves a fresh cache; restore-keys pulls the most recent prior one, so
       # only NEW floats' metadata is downloaded each run.
       - name: Restore metadata cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: argo_local
           key: argo-meta-${{ github.run_id }}
