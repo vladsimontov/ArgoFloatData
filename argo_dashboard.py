@@ -70,6 +70,12 @@ st.markdown("""
   .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] {font-size: 1.15rem;}
   .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] p {
       font-size: 1.15rem; font-weight: 600;}
+  /* a bit larger, more readable body text, control labels, and captions */
+  [data-testid="stMarkdownContainer"] p,
+  [data-testid="stMarkdownContainer"] li {font-size: 1.06rem;}
+  [data-testid="stWidgetLabel"] p {font-size: 1.04rem;}
+  [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+      font-size: 1.0rem;}
 </style>
 """, unsafe_allow_html=True)
 
