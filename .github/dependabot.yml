@@ -17,6 +17,15 @@ updates:
       # One combined PR so the whole set is tested together (how it ships).
       python-deps:
         patterns: ["*"]
+    ignore:
+      # A native MAJOR bump (numpy 1->2, pandas 2->3) is exactly what segfaulted
+      # on the Cloud once, and CI on ubuntu can't fully guarantee the Cloud's
+      # image. Keep these on their current major (patch/minor still flow); bump
+      # the major deliberately and test it, never as a silent auto-PR.
+      - dependency-name: numpy
+        update-types: ["version-update:semver-major"]
+      - dependency-name: pandas
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
