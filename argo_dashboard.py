@@ -27,6 +27,15 @@ import pydeck as pdk
 import xarray as xr
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
+
+# Larger default chart fonts so axis titles, ticks, and legends stay readable.
+# Individual figures inherit this base unless they set their own size.
+_argo_tpl = pio.templates[pio.templates.default]
+_argo_tpl.layout.font.size = 15          # base: ticks, legends, annotations
+_argo_tpl.layout.title.font.size = 17
+_argo_tpl.layout.xaxis.title.font.size = 16
+_argo_tpl.layout.yaxis.title.font.size = 16
 
 try:
     import gsw  # TEOS-10 seawater toolbox (derived physics); optional
@@ -863,7 +872,7 @@ if _ncyc:
 
 def _titled(fig, text):
     fig.update_layout(title=dict(text=text, x=0.0, xanchor="left",
-                                 font=dict(size=13)), margin=dict(t=48))
+                                 font=dict(size=16)), margin=dict(t=48))
     return fig
 
 
@@ -928,8 +937,8 @@ def _overlay_fig(profiles, show_band=True):
             hovertemplate=f"{name}=%{{x:.4g}} ± %{{customdata:.3g}}"
                           "<br>PRES=%{y:.0f} dbar<extra></extra>"))
         title = f"{name} [{units}]" if units else name
-        ax = dict(title=dict(text=title, font=dict(color=color, size=12)),
-                  tickfont=dict(color=color, size=10), showgrid=(i == 0), zeroline=False)
+        ax = dict(title=dict(text=title, font=dict(color=color, size=14)),
+                  tickfont=dict(color=color, size=12), showgrid=(i == 0), zeroline=False)
         if i == 0:
             ax["side"] = "bottom"
             layout["xaxis"] = ax
