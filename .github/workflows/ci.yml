@@ -1,0 +1,45 @@
+name: CI
+
+# Boots the app headlessly on Linux + Python 3.12 against the PINNED requirements,
+# i.e. the same environment Streamlit Community Cloud builds. This catches the
+# class of failure that took the app down once: a dependency drift or a bad Linux
+# wheel that segfaults on startup, or a missing Streamlit API, before it reaches
+# the live deployment. Runs on every push/PR to main (including Dependabot bumps).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"      # match Streamlit Community Cloud
+          cache: pip
+
+      - name: Install pinned runtime deps (same set the Cloud installs)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install test deps
+        run: pip install pytest
+
+      - name: Smoke test (headless app boot)
+        run: pytest -q tests/

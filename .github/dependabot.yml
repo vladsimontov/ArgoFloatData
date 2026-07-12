@@ -1,0 +1,26 @@
+version: 2
+
+# Keeps the pinned deps and GitHub Actions fresh via reviewable PRs instead of
+# silent drift on the next Cloud rebuild. Each PR runs through the CI smoke test
+# (ci.yml) on Linux + Python 3.12, so a version bump that breaks the app shows up
+# as a red check on a PR, never on the live deployment. Update requirements.txt
+# only after the check is green.
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      # One combined PR so the whole set is tested together (how it ships).
+      python-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
