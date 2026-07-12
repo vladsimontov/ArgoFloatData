@@ -1513,9 +1513,16 @@ with tab_overlay:
         measur = oc2.multiselect(
             "Measurands to overlay (up to 4)", param_opts, default=_ovl_def,
             max_selections=4,
-            help=f"Each gets its own color and x-axis. Uses the {view} data view "
-                 "(set on Profile & Trend).")
-        show_band = st.checkbox(
+            help=f"Each gets its own color and x-axis. Takes the adjusted-vs-real-time "
+                 f"field from the {view} data view (set on Profile & Trend); QC "
+                 "filtering is controlled below.")
+        ck1, ck2 = st.columns([1, 1])
+        qc_on = ck1.checkbox(
+            "Apply QA/QC filtering", value=apply_qc,
+            help="On: drop levels flagged questionable or bad (QC 3, 4, 9). Off: plot "
+                 "every reported level, flags and all, for this overlay only. Turn it "
+                 "off to see what the QC screened out.")
+        show_band = ck2.checkbox(
             "Show ±1σ spread", value=True,
             help="Shade each measurand to plus or minus one standard deviation across "
                  "the selected profiles, so you can see how variable the water column "
@@ -1525,7 +1532,7 @@ with tab_overlay:
         else:
             profiles = []
             for m in measur:
-                dfm, pcol, vcol = param_long_frame(ds, m, adjusted, apply_qc)
+                dfm, pcol, vcol = param_long_frame(ds, m, adjusted, qc_on)
                 if dfm.empty or "cycle" not in dfm.columns:
                     continue
                 mp = _stat_profile(dfm[dfm["cycle"].between(X, Y)])
