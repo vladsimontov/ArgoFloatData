@@ -94,6 +94,9 @@ st.markdown("""
 #  2) let the browser handle Ctrl/Cmd shortcuts (copy/paste/cut/select-all) instead
 #     of Streamlit's single-key hotkeys (c = clear cache, r = rerun), which otherwise
 #     hijack Ctrl+C. Capture-phase on window fires before Streamlit's handler.
+#  3) poke component iframes on tab switch so the deck.gl trajectory map, which can
+#     mount at zero size inside an inactive (display:none) tab and stay blank until
+#     a full refresh, re-measures and paints when its tab becomes visible.
 st.iframe("""
 <script>
 const win = window.parent, doc = win.document;
@@ -112,6 +115,21 @@ win.addEventListener('keydown', function(e){
   // a modifier is held -> the user wants a BROWSER shortcut (copy/paste/etc),
   // not Streamlit's bare-key hotkey; stop it reaching Streamlit's handler.
   if (e.ctrlKey || e.metaKey) e.stopImmediatePropagation();
+}, true);
+
+win.addEventListener('click', function(e){
+  // On a tab switch, the just-shown panel's map went from 0x0 (hidden) to real
+  // size; deck.gl doesn't always catch that. Fire a resize inside every
+  // same-origin component iframe (and the window) so it re-measures and paints.
+  if (!e.target.closest || !e.target.closest('button[role="tab"]')) return;
+  [120, 400].forEach(function(t){
+    setTimeout(function(){
+      doc.querySelectorAll('iframe').forEach(function(f){
+        try { f.contentWindow.dispatchEvent(new Event('resize')); } catch(_){}
+      });
+      win.dispatchEvent(new Event('resize'));
+    }, t);
+  });
 }, true);
 </script>
 """, height=1)
