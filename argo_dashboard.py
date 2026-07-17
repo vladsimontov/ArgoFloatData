@@ -773,14 +773,24 @@ radius_q = 500
 active_only = True
 show_all = False
 if loc_on:
+    # First, because it overrides everything below it, which then greys out.
+    show_all = st.sidebar.checkbox(
+        "Show every active float", value=False,
+        help=f"Ignore the point and radius and map the whole live array: every float "
+             f"that reported within {ACTIVE_DAYS} days, worldwide (~4,300). Inactive "
+             "floats are never included here.")
     _region = st.sidebar.selectbox(
-        "Jump to a region", ["(custom)"] + list(REGIONS),
-        index=1 + list(REGIONS).index(REGION_DEFAULT),
+        "Jump to a region",
+        ["N/A · showing every active float"] if show_all
+        else ["(custom)"] + list(REGIONS),
+        index=0 if show_all else 1 + list(REGIONS).index(REGION_DEFAULT),
+        disabled=show_all,
         help="Well-sampled spots to explore. Picking one fills in the coordinates "
              "and radius below, which you can then adjust.")
     # Apply a region BEFORE the coordinate widgets are created: Streamlit only lets
     # you seed a widget's session_state ahead of instantiating it.
-    if _region != "(custom)" and _region != st.session_state.get("_last_region"):
+    if (not show_all and _region != "(custom)"
+            and _region != st.session_state.get("_last_region")):
         st.session_state["_last_region"] = _region
         _rla, _rlo, _rr = REGIONS[_region]
         st.session_state["lat_q"] = _rla
@@ -792,14 +802,9 @@ if loc_on:
     st.session_state.setdefault("radius_q", _rd[2])
     _lc1, _lc2 = st.sidebar.columns(2)
     lat_q = _lc1.number_input("Latitude", min_value=-90.0, max_value=90.0,
-                              step=0.5, format="%.2f", key="lat_q")
+                              step=0.5, format="%.2f", key="lat_q", disabled=show_all)
     lon_q = _lc2.number_input("Longitude", min_value=-180.0, max_value=180.0,
-                              step=0.5, format="%.2f", key="lon_q")
-    show_all = st.sidebar.checkbox(
-        "Show every active float", value=False,
-        help=f"Ignore the point and radius and map the whole live array: every float "
-             f"that reported within {ACTIVE_DAYS} days, worldwide (~4,300). Inactive "
-             "floats are never included here.")
+                              step=0.5, format="%.2f", key="lon_q", disabled=show_all)
     radius_q = st.sidebar.slider("Within (km)", min_value=25, max_value=3000,
                                  step=25, key="radius_q", disabled=show_all,
                                  help="Great-circle distance from the point above.")
