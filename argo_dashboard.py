@@ -689,6 +689,20 @@ community tool, not affiliated with or endorsed by the Argo Program.*
         "All Feedback and Feature requests are welcome.")
 
 # ---- sidebar: search ----
+# compact float-type label per WMO (BGC / Core, flagged Deep); drives both the
+# sidebar type filter and the table's type column, so the two always agree
+def _float_type(dk, deep):
+    base = "BGC" if dk == "bgc" else "Core" if dk == "core" else "-"
+    return f"{base} · Deep" if deep else base
+type_by_wmo = {}
+if {"data_kind", "is_deep"}.issubset(floats.columns):
+    type_by_wmo = {str(w): _float_type(dk, bool(d)) for w, dk, d in
+                   zip(floats["wmo"], floats["data_kind"], floats["is_deep"])}
+# raw last_date per float; parsed lazily for only the rows actually shown, since
+# it is an Argo YYYYMMDDHHMMSS number that needs parse_argo_date, not a timestamp
+last_raw_by_wmo = (dict(zip(floats["wmo"].astype(str), floats["last_date"]))
+                   if "last_date" in floats.columns else {})
+
 st.sidebar.header("Find a float")
 serial_q = st.sidebar.text_input("Serial number contains",
                                  help="Matches SENSOR_SERIAL_NO or FLOAT_SERIAL_NO "
@@ -696,6 +710,12 @@ serial_q = st.sidebar.text_input("Serial number contains",
 models = ["(any)"] + sorted(sensors["sensor_model"].dropna().unique().tolist())
 model_q = st.sidebar.selectbox("Sensor model", models,
                                help="e.g. SBE41, SBE41CP for the CTD.")
+_type_opts = sorted({t for t in type_by_wmo.values() if t and t != "-"})
+type_q = st.sidebar.selectbox(
+    "Float type", ["(any)"] + _type_opts,
+    help="Core = temperature/salinity. BGC = biogeochemical sensors on board. "
+         "Deep = profiles below 4000 m (SBE61 floats reach 6000 m). Matches the "
+         "type column in the results.")
 wmo_q = st.sidebar.text_input("…or WMO number", help="Jump straight to a float.")
 
 st.sidebar.markdown("**…or by location**")
@@ -774,6 +794,8 @@ def search():
         df = df[m]
     if wmo_q.strip():
         df = df[df["wmo"].astype(str).str.contains(wmo_q.strip())]
+    if type_q != "(any)":
+        df = df[df["wmo"].astype(str).map(type_by_wmo).eq(type_q)]
     if loc_on:
         df = df[df["wmo"].astype(str).isin(near_km)]
     return df
@@ -783,20 +805,7 @@ hits = search()
 
 st.subheader("Matches")
 
-# compact float-type label per WMO (BGC / Core, flagged Deep) for the table
-def _float_type(dk, deep):
-    base = "BGC" if dk == "bgc" else "Core" if dk == "core" else "-"
-    return f"{base} · Deep" if deep else base
-type_by_wmo = {}
-if {"data_kind", "is_deep"}.issubset(floats.columns):
-    type_by_wmo = {str(w): _float_type(dk, bool(d)) for w, dk, d in
-                   zip(floats["wmo"], floats["data_kind"], floats["is_deep"])}
-# raw last_date per float; parsed lazily for only the rows actually shown, since
-# it is an Argo YYYYMMDDHHMMSS number that needs parse_argo_date, not a timestamp
-last_raw_by_wmo = (dict(zip(floats["wmo"].astype(str), floats["last_date"]))
-                   if "last_date" in floats.columns else {})
-
-if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or loc_on:
+if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" or loc_on:
     n_floats = int(hits["wmo"].nunique())
     st.markdown(f"**{n_floats:,} float{'s' if n_floats != 1 else ''} found**")
     # When searching by serial, label what triggered each match (the sensor and its
@@ -840,6 +849,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or loc_on:
         show.insert(5 if loc_on else 4, "matched_on", show.pop("matched_on"))
     # A spatial search deserves a spatial answer: plot the hits' last fixes with the
     # search point, so the result reads as a map, not just a list.
+    _map_wmo = None
     if loc_on and len(show):
         _mp = show[["wmo", "km away"]].copy()
         _mp["lat"] = _mp["wmo"].astype(str).map(
@@ -849,24 +859,36 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or loc_on:
         _mp = _mp.dropna(subset=["lat", "lon"])
         if len(_mp):
             _pt = pd.DataFrame({"lat": [lat_q], "lon": [lon_q]})
-            st.pydeck_chart(pdk.Deck(
+            # id= is required for Streamlit to report pydeck selections
+            _mev = st.pydeck_chart(pdk.Deck(
                 map_style=None,
                 initial_view_state=pdk.ViewState(
                     latitude=float(lat_q), longitude=float(lon_q),
                     zoom=next((z for thr, z in [(150, 6), (400, 5), (900, 4),
                                                 (2000, 3)] if radius_q < thr), 2)),
                 layers=[
-                    pdk.Layer("ScatterplotLayer", data=_mp,
+                    pdk.Layer("ScatterplotLayer", id="hits", data=_mp,
                               get_position="[lon, lat]",
                               get_fill_color=[10, 110, 189, 160], get_radius=18000,
-                              radius_min_pixels=3, pickable=True),
-                    pdk.Layer("ScatterplotLayer", data=_pt, get_position="[lon, lat]",
+                              radius_min_pixels=3, pickable=True, auto_highlight=True),
+                    pdk.Layer("ScatterplotLayer", id="point", data=_pt,
+                              get_position="[lon, lat]",
                               get_fill_color=[214, 40, 40], get_radius=26000,
                               radius_min_pixels=7, pickable=False)],
-                tooltip={"text": "float {wmo}\n{km away} km away"}), height=340)
+                tooltip={"text": "float {wmo}\n{km away} km away"}),
+                height=340, on_select="rerun", selection_mode="single-object",
+                key="matches_map")
+            # clicking a dot opens that float, same as ticking its row
+            _msel = getattr(_mev, "selection", None)
+            _mobjs = ((_msel.get("objects") if isinstance(_msel, dict)
+                       else getattr(_msel, "objects", None)) or {})
+            _mhits = _mobjs.get("hits") or []
+            if _mhits:
+                _map_wmo = str(_mhits[0].get("wmo"))
             st.caption(f"🔴 your search point ({lat_q:.2f}, {lon_q:.2f}) · 🔵 each "
-                       f"float's last known fix within {radius_q:,} km. Floats drift, "
-                       "so a fix is where it was last heard from, not where it is now.")
+                       f"float's last known fix within {radius_q:,} km · click a float "
+                       "to open it. Floats drift, so a fix is where it was last heard "
+                       "from, not where it is now.")
     cap = "Select a row's checkbox (far left) to open that float ↓"
     if serial_hit:
         cap += "  ·  the highlighted **matched on** column shows what your serial hit"
@@ -890,41 +912,51 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or loc_on:
         _cfg["matched_on"] = st.column_config.TextColumn(
             "matched on", help="Which sensor serial (or the float serial) your "
                                "search matched.")
-    # Highlight the currently-selected row green. Read the selection recorded before
-    # this rerun (from the checkbox click that triggered it); Styler colors are
-    # explicit, so the green holds in both light and dark mode.
+    wmos = sorted(hits["wmo"].astype(str).unique().tolist())
+    # A float opens from three places: a map dot, a row checkbox, or the dropdown.
+    # Resolve them all here, BEFORE the table renders, so the green highlight tracks
+    # whatever is actually open on this same rerun rather than lagging one click.
+    # Forget remembered clicks whenever the result set changes, and act only on a
+    # *new* selection so the dropdown can still override the other two.
+    sig = (serial_q, wmo_q, model_q, type_q, loc_on, lat_q, lon_q, radius_q,
+           active_only)
+    if st.session_state.get("_match_sig") != sig:
+        st.session_state["_match_sig"] = sig
+        st.session_state.pop("_last_row", None)
+        st.session_state.pop("_last_map_wmo", None)
+    # map click (the pydeck chart above already reported this rerun's selection)
+    if _map_wmo is not None and _map_wmo != st.session_state.get("_last_map_wmo"):
+        st.session_state["_last_map_wmo"] = _map_wmo
+        st.session_state["wmo_pick"] = _map_wmo
+    # row checkbox: read the widget state recorded by the click that caused this rerun
     _ms = st.session_state.get("matches_table")
     _seld = ((_ms.get("selection") if isinstance(_ms, dict)
               else getattr(_ms, "selection", None)) if _ms is not None else None)
     _selrows = ((_seld.get("rows", []) if isinstance(_seld, dict)
                  else getattr(_seld, "rows", []) or []) if _seld is not None else [])
     _selrow0 = _selrows[0] if _selrows else None
+    if (_selrow0 is not None and _selrow0 < len(show)
+            and _selrow0 != st.session_state.get("_last_row")):
+        st.session_state["_last_row"] = _selrow0
+        st.session_state["wmo_pick"] = str(show.iloc[_selrow0]["wmo"])
+    # Highlight the row of whichever float is open now. Styler colors are explicit,
+    # so the green holds in both light and dark mode.
+    _open = st.session_state.get("wmo_pick")
+    _ix = (show.index[show["wmo"].astype(str) == str(_open)] if _open else [])
+    _hl = int(_ix[0]) if len(_ix) else None
     _sty = show.style
     if serial_hit:
         _sty = _sty.set_properties(subset=["matched_on"],
                                    **{"background-color": "#fff3cd", "color": "#663c00"})
-    if _selrow0 is not None and _selrow0 < len(show):
+    if _hl is not None:
         _sty = _sty.apply(lambda r: (["background-color:#c3ecd0; color:#0b6b3a"] * len(r)
-                                     if r.name == _selrow0 else [""] * len(r)), axis=1)
-    event = st.dataframe(_sty, width="stretch", height=220,
-                         on_select="rerun", selection_mode="single-row",
-                         key="matches_table", column_config=_cfg)
-    wmos = sorted(hits["wmo"].astype(str).unique().tolist())
-    # Clicking a table row opens that float by pre-filling the picker below.
-    # Forget the remembered click whenever the result set changes, and act only
-    # on a *new* row so the dropdown can still override a row selection.
-    sig = (serial_q, wmo_q, model_q, loc_on, lat_q, lon_q, radius_q, active_only)
-    if st.session_state.get("_match_sig") != sig:
-        st.session_state["_match_sig"] = sig
-        st.session_state.pop("_last_row", None)
-    _sel = getattr(event, "selection", None)
-    _rows = list(_sel.rows) if _sel and getattr(_sel, "rows", None) else []
-    _cur = _rows[0] if _rows else None
-    if _cur is not None and _cur < len(show) and _cur != st.session_state.get("_last_row"):
-        st.session_state["_last_row"] = _cur
-        st.session_state["wmo_pick"] = str(show.iloc[_cur]["wmo"])
+                                     if r.name == _hl else [""] * len(r)), axis=1)
+    st.dataframe(_sty, width="stretch", height=220,
+                 on_select="rerun", selection_mode="single-row",
+                 key="matches_table", column_config=_cfg)
 else:
-    st.info("Enter a serial number, sensor model, or WMO in the sidebar.")
+    st.info("Enter a serial number, sensor model, float type, WMO, or a "
+            "location in the sidebar.")
     wmos = []
 
 if not wmos:
