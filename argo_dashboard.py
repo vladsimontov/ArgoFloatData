@@ -102,6 +102,25 @@ TYPE_COLORS = {
 TYPE_COLOR_OTHER = [150, 150, 150, 180]
 
 
+# Plotly draws country borders but ships no country NAMES, so the labels are ours.
+# (label, lat, lon), kept to what stays legible at world scale. Ocean basins are in
+# here deliberately: on a float map the water is the subject, and "which ocean is
+# this" is the orientation question people actually have.
+# Only what stays legible at world scale, and only on LAND. Two deliberate absences:
+# Europe's countries (UK/France/Spain/Germany/Italy collapse into mush at this size,
+# so the continent carries the label and the white borders show the countries), and
+# ocean basin names, which sat unreadable under the very floats they were meant to
+# orient. Do not label the layer the data covers; the continents orient it fine.
+GEO_LABELS = [
+    ("CANADA", 58, -101), ("UNITED STATES", 39, -100), ("MEXICO", 23, -103),
+    ("BRAZIL", -10, -52), ("ARGENTINA", -36, -65), ("GREENLAND", 74, -42),
+    ("EUROPE", 50, 15), ("AFRICA", 3, 21), ("RUSSIA", 61, 95),
+    ("CHINA", 35, 103), ("INDIA", 22, 79), ("JAPAN", 37, 139),
+    ("INDONESIA", -2, 118), ("AUSTRALIA", -25, 134), ("NEW ZEALAND", -42, 173),
+    ("SOUTH AFRICA", -30, 24), ("ANTARCTICA", -82, 20),
+]
+
+
 def _geo_fig(mp, projection="natural earth"):
     """Global float map on a real projection instead of Web Mercator tiles.
 
@@ -122,15 +141,26 @@ def _geo_fig(mp, projection="natural earth"):
         c = TYPE_COLOR_OTHER if kind == "_other" else TYPE_COLORS[kind]
         fig.add_trace(go.Scattergeo(
             lat=sub["lat"], lon=sub["lon"], mode="markers",
-            marker=dict(size=5, color=f"rgba({c[0]},{c[1]},{c[2]},{c[3] / 255:.2f})",
-                        line=dict(width=0)),
+            # fully opaque with a thin dark rim: the dots were light blue on a pale
+            # blue ocean, which is the whole reason the map read as washed out, and
+            # the rim keeps overlapping floats readable where the array is dense
+            marker=dict(size=6, color=f"rgb({c[0]},{c[1]},{c[2]})",
+                        line=dict(width=0.5, color="rgba(12,35,55,0.55)")),
             name=kind, customdata=sub[["wmo", "type"]].to_numpy(),
             hovertemplate="float %{customdata[0]} · %{customdata[1]}<extra></extra>"))
-    fig.update_geos(projection_type=projection, showland=True, landcolor="#e6e6e6",
-                    showocean=True, oceancolor="#f5fafd", showcoastlines=True,
-                    coastlinecolor="#c9d6df", coastlinewidth=0.4, showframe=False,
-                    lataxis_range=[-90, 90], lonaxis_range=[-180, 180],
-                    bgcolor="rgba(0,0,0,0)")
+    # Land/ocean pushed apart in tone so the dots sit ON something rather than blend
+    # into it, and country borders restore the orientation the Carto basemap gave.
+    fig.update_geos(projection_type=projection, showland=True, landcolor="#c8ccd1",
+                    showocean=True, oceancolor="#eef5fa", showcoastlines=True,
+                    coastlinecolor="#94a3b1", coastlinewidth=0.5,
+                    showcountries=True, countrycolor="#ffffff", countrywidth=0.6,
+                    showframe=False, lataxis_range=[-90, 90],
+                    lonaxis_range=[-180, 180], bgcolor="rgba(0,0,0,0)")
+    fig.add_trace(go.Scattergeo(
+        lat=[p[1] for p in GEO_LABELS], lon=[p[2] for p in GEO_LABELS],
+        text=[p[0] for p in GEO_LABELS], mode="text",
+        textfont=dict(size=9, color="rgba(40,60,80,0.75)"),
+        hoverinfo="skip", showlegend=False))
     fig.update_layout(height=500, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
                       dragmode="pan", paper_bgcolor="rgba(0,0,0,0)",
                       clickmode="event+select")
