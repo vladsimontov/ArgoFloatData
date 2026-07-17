@@ -1005,7 +1005,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
                  f"({lat_q:.2f}, {lon_q:.2f})")
                 + " · blue = Core, green = BGC, darker = Deep · click a float to open "
                   "it. Floats drift, so a fix is where it was last heard from, not "
-                  "where it is now.")
+                  "where it is now or where it was during its lifetime")
     cap = "Select a row's checkbox (far left) to open that float ↓"
     if serial_hit:
         cap += "  ·  the highlighted **matched on** column shows what your serial hit"
