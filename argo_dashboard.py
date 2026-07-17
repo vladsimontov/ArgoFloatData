@@ -1034,6 +1034,15 @@ def fetch_raw_many(dac, wmo, cycles, is_bgc, progress=None):
     return out
 
 
+def _human_bytes(n):
+    """Byte count as a short human-readable size (1 decimal from KB up)."""
+    x = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if x < 1024 or unit == "GB":
+            return f"{int(x)} {unit}" if unit == "B" else f"{x:,.1f} {unit}"
+        x /= 1024
+
+
 def raw_cycle_frame(path, cycle):
     """One cycle's raw file -> a wide tidy frame: cycle/time/lat/lon/pres + every
     numeric measurand on the PRES grid (intermediate sensor signals included) plus
@@ -1586,27 +1595,33 @@ with tab_raw:
             st.session_state["raw_pick"] = set(cycles)
             st.session_state["raw_pick_ver"] = st.session_state["raw_pick_ver"] + 1
 
-        qa, qb, qc, qd = st.columns([1, 1, 1, 2])
-        if qa.button("Latest", help="Select only the most recent cycle."):
-            _set_pick([_cyc_vals[-1]]); st.rerun()
-        if qb.button("All", help=f"Select all {len(_cyc_vals)} cycles."):
-            _set_pick(_cyc_vals); st.rerun()
-        if qc.button("None"):
-            _set_pick([]); st.rerun()
-        _nth = qd.number_input("Every Nth cycle", min_value=1,
-                               max_value=max(1, len(_cyc_vals)), value=10, step=1,
-                               help="Sample the whole record without pulling every "
-                                    "cycle. Press Apply to tick those boxes.")
-        if qd.button(f"Apply every {int(_nth)}th"):
-            _set_pick(_cyc_vals[::int(_nth)]); st.rerun()
+        # one tight row: a horizontal container packs these at their natural width,
+        # instead of columns stretching each control across the page
+        with st.container(horizontal=True, vertical_alignment="bottom", gap="small"):
+            if st.button("Latest", help="Select only the most recent cycle."):
+                _set_pick([_cyc_vals[-1]]); st.rerun()
+            if st.button("All", help=f"Select all {len(_cyc_vals)} cycles."):
+                _set_pick(_cyc_vals); st.rerun()
+            if st.button("None", help="Clear the selection."):
+                _set_pick([]); st.rerun()
+            _nth = st.number_input("Every Nth cycle", min_value=1,
+                                   max_value=max(1, len(_cyc_vals)), value=10, step=1,
+                                   width=150,
+                                   help="Sample the whole record without pulling every "
+                                        "cycle. Press Apply to tick those boxes.")
+            if st.button(f"Apply every {int(_nth)}th"):
+                _set_pick(_cyc_vals[::int(_nth)]); st.rerun()
 
         _tbl = pd.DataFrame({
             "pull": [c in _sel for c in _cyc_vals],
             "cycle": _cyc_vals,
             "date": [pd.to_datetime(_by_cyc.get(c, (np.nan,) * 3)[0], errors="coerce")
                      for c in _cyc_vals],
-            "lat": [_by_cyc.get(c, (np.nan,) * 3)[1] for c in _cyc_vals],
-            "lon": [_by_cyc.get(c, (np.nan,) * 3)[2] for c in _cyc_vals],
+            # to_numeric so a missing fix is NaN (blank cell) and not a grey "None"
+            "lat": pd.to_numeric([_by_cyc.get(c, (np.nan,) * 3)[1] for c in _cyc_vals],
+                                 errors="coerce"),
+            "lon": pd.to_numeric([_by_cyc.get(c, (np.nan,) * 3)[2] for c in _cyc_vals],
+                                 errors="coerce"),
         })
         _ed = st.data_editor(
             _tbl, hide_index=True, height=260, key=f"raw_tbl_{_ver}",
@@ -1750,16 +1765,27 @@ with tab_raw:
                                    if len(_pulled) > 1 else "")
                                 + "; each measurand keeps its own color and x-axis.")
                     # everything pulled, not just what's plotted: every parameter in
-                    # the raw files plus their QC flags, for offline work
+                    # the raw files plus their QC flags, for offline work.
+                    # Built once per pull and held in session_state: download_button
+                    # takes its data eagerly, so encoding on every rerun would rebuild
+                    # a multi-hundred-MB string each time a widget moved.
                     _meta_cols = [c for c in ("cycle", "time", "lat", "lon", "pres")
                                   if c in raw_df.columns]
                     _data_cols = [c for c in raw_df.columns if c not in _meta_cols]
-                    _out = raw_df[_meta_cols + _data_cols].copy()
-                    _out.insert(0, "wmo", sel_wmo)
+                    _sig = (sel_wmo, tuple(_pulled), len(raw_df),
+                            tuple(_meta_cols + _data_cols))
+                    if st.session_state.get("raw_csv_sig") != _sig:
+                        _o = raw_df[_meta_cols + _data_cols].copy()
+                        _o.insert(0, "wmo", sel_wmo)
+                        st.session_state["raw_csv_sig"] = _sig
+                        st.session_state["raw_csv"] = (
+                            _o.to_csv(index=False).encode(), len(_o), len(_o.columns))
+                    _csv_bytes, _nrows, _ncols = st.session_state["raw_csv"]
                     st.download_button(
                         f"Download all {len(_pulled)} raw profile(s) as one CSV "
-                        f"({len(_out):,} rows × {len(_out.columns)} cols)",
-                        _out.to_csv(index=False).encode(),
+                        f"({_nrows:,} rows × {_ncols} cols · "
+                        f"{_human_bytes(len(_csv_bytes))})",
+                        _csv_bytes,
                         file_name=f"{sel_wmo}_raw_{_pulled[0]}-{_pulled[-1]}.csv",
                         mime="text/csv", key="raw_csv_all",
                         help="Everything pulled, not just what's plotted: one row per "
