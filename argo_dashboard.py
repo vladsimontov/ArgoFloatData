@@ -732,6 +732,8 @@ if {"data_kind", "is_deep"}.issubset(floats.columns):
 # it is an Argo YYYYMMDDHHMMSS number that needs parse_argo_date, not a timestamp
 last_raw_by_wmo = (dict(zip(floats["wmo"].astype(str), floats["last_date"]))
                    if "last_date" in floats.columns else {})
+nprof_by_wmo = (dict(zip(floats["wmo"].astype(str), floats["n_profiles"]))
+                if "n_profiles" in floats.columns else {})
 
 st.sidebar.header("Find a float")
 serial_q = st.sidebar.text_input("Serial number contains",
@@ -886,12 +888,15 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
                                       np.where(_age <= ACTIVE_DAYS,
                                                "active", "inactive")))
     show.insert(3, "last profile", _lp)
+    show.insert(4, "profiles",
+                pd.to_numeric(show["wmo"].astype(str).map(nprof_by_wmo),
+                              errors="coerce").astype("Int64"))
     if loc_on:
         # distance from the searched point; nearest first
-        show.insert(4, "km away", show["wmo"].astype(str).map(near_km).round(0))
+        show.insert(5, "km away", show["wmo"].astype(str).map(near_km).round(0))
         show = show.sort_values("km away").reset_index(drop=True)
     if serial_hit:
-        show.insert(5 if loc_on else 4, "matched_on", show.pop("matched_on"))
+        show.insert(6 if loc_on else 5, "matched_on", show.pop("matched_on"))
     # A spatial search deserves a spatial answer: plot the hits' last fixes with the
     # search point, so the result reads as a map, not just a list.
     _map_wmo = None
@@ -948,6 +953,11 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
         "last profile": st.column_config.DatetimeColumn(
             "last profile", format="YYYY-MM-DD",
             help="Date of the most recent profile this float reported."),
+        "profiles": st.column_config.NumberColumn(
+            "profiles", format="%d",
+            help="How many profiles (dives) this float has reported, from the index. "
+                 "A long record means more history to plot; the Raw tab pulls these "
+                 "one cycle at a time."),
         "km away": st.column_config.NumberColumn(
             "km away", format="%.0f km",
             help="Great-circle distance from your search point to this float's last "
@@ -1176,25 +1186,25 @@ def _stacked_layout(items):
 
 def _casts_fig(series, units_map):
     """Every cast drawn discretely, never averaged, on the shared stacked
-    pressure/x-axis layout. series is [(name, [(cycle, pres, val, date)])]. With a
-    single measurand each cast is colored by date (the drift view); with several,
-    casts take their measurand's color at low opacity so each axis stays legible."""
+    pressure/x-axis layout. series is [(name, [(label, pres, val, cfrac)])], one
+    entry per cast, where a cast is one N_PROF of one cycle: a cycle's primary and
+    near-surface sampling schemes are separate casts and must not be joined, or the
+    line leaps from the deepest point back up to the surface. cfrac (0-1) places
+    the cast on the date ramp. One measurand colors by date (the drift view); with
+    several, casts take their measurand's color at low opacity."""
     layout, xas = _stacked_layout([(nm, units_map.get(nm)) for nm, _ in series])
     fig = go.Figure()
     single = len(series) == 1
     for i, (nm, casts) in enumerate(series):
         base = _OVL_COLORS[i % len(_OVL_COLORS)]
-        cols = (px.colors.sample_colorscale(
-            "Viridis", [j / max(1, len(casts) - 1) for j in range(len(casts))])
-            if single and len(casts) > 1 else None)
-        for j, (cyc, pres, val, dt) in enumerate(casts):
+        cols = (px.colors.sample_colorscale("Viridis", [c[3] for c in casts])
+                if single and casts else None)
+        for j, (label, pres, val, _cf) in enumerate(casts):
             fig.add_trace(go.Scattergl(
                 x=val, y=pres, mode="lines",
                 line=dict(color=cols[j] if cols else _rgba(base, 0.45), width=1.3),
                 xaxis=xas[i], yaxis="y", showlegend=False,
-                hovertemplate=(f"cycle {cyc}"
-                               + (f" · {dt:%Y-%m-%d}" if pd.notna(dt) else "")
-                               + f"<br>{nm}=%{{x:.4g}}"
+                hovertemplate=(f"{label}<br>{nm}=%{{x:.4g}}"
                                "<br>PRES=%{y:.1f} dbar<extra></extra>")))
     fig.update_layout(**layout)
     return fig
@@ -1289,6 +1299,18 @@ def raw_cycle_frame(path, cycle):
                 units[v] = rds[v].attrs.get("units")
     df = pd.DataFrame(cols)
     df.insert(0, "cycle", cycle)
+    # One cycle file can hold several profiles (N_PROF): typically a primary
+    # sampling scheme plus a shallow unpumped near-surface one. They are separate
+    # casts, so tag them and never join them into a single line.
+    df.insert(1, "n_prof", np.repeat(np.arange(nprof), nlev))
+    if "VERTICAL_SAMPLING_SCHEME" in rds:
+        _v = [(x.decode(errors="ignore") if isinstance(x, bytes) else str(x)).strip()
+              for x in np.asarray(rds["VERTICAL_SAMPLING_SCHEME"].values).ravel()]
+        _v = [(s.split(":")[0].strip() or "profile") for s in _v][:nprof]
+        if len(_v) == nprof:
+            df.insert(2, "sampling",
+                      np.repeat(np.array(_v, dtype=object).reshape(nprof, 1),
+                                nlev, 1).ravel())
     # per-profile fields broadcast down the levels
     for name, key in (("time", "JULD"), ("lat", "LATITUDE"), ("lon", "LONGITUDE")):
         if key in rds:
@@ -1902,13 +1924,20 @@ with tab_raw:
                                f"{'…' if len(_missing) > 8 else ''}).")
                 _units = st.session_state.get("raw_units", {})
                 _pulled = sorted(raw_df["cycle"].unique().tolist())
+                _meta_names = ("cycle", "n_prof", "sampling", "pres", "time",
+                               "lat", "lon")
                 raw_params = [c for c in raw_df.columns
-                              if c not in ("cycle", "pres", "time", "lat", "lon")
-                              and not c.endswith("_QC")]
+                              if c not in _meta_names and not c.endswith("_QC")]
                 if not raw_params:
                     st.info("These raw files report no plottable measurands.")
                 else:
-                    _rdef = [p for p in raw_params if not p.endswith("_ADJUSTED")][:1]
+                    # prefer a real measurand: the first raw param is often MTIME,
+                    # a time offset whose fill values swamp the axis
+                    _plain = [p for p in raw_params if not p.endswith("_ADJUSTED")]
+                    _rdef = (next(([p] for p in ("TEMP", "PSAL", "DOXY", "CHLA",
+                                                 "BBP700", "PRES")
+                                   if p in _plain),
+                                  [p for p in _plain if p != "MTIME"][:1] or _plain[:1]))
                     mc1, mc2 = st.columns([2, 1])
                     rmeas = mc1.multiselect(
                         "Measurands (raw, up to 4)", raw_params,
@@ -1930,29 +1959,49 @@ with tab_raw:
                     if not rmeas:
                         st.info("Pick a measurand to plot.")
                     elif mode == "Individual casts":
+                        # One line per (cycle, N_PROF). A cycle's primary and
+                        # near-surface schemes are separate casts; joining them
+                        # would draw a line from the deepest point to the surface.
+                        _rank = {c: i for i, c in enumerate(_pulled)}
+                        _grp = (["cycle", "n_prof"] if "n_prof" in raw_df.columns
+                                else ["cycle"])
                         series = []
                         for m in rmeas:
                             casts = []
-                            for _c in _pulled:
-                                _s = raw_df[raw_df["cycle"] == _c]
+                            for _k, _s in raw_df.groupby(_grp, sort=True):
+                                _c = _k[0] if isinstance(_k, tuple) else _k
                                 _mk = (np.isfinite(_s["pres"].to_numpy())
                                        & np.isfinite(_s[m].to_numpy()))
                                 if not _mk.any():
                                     continue
+                                _lab = f"cycle {_c}"
+                                if "sampling" in _s.columns:
+                                    _sc = str(_s["sampling"].iloc[0])
+                                    if _sc and _sc != "nan":
+                                        _lab += f" · {_sc}"
                                 _d = (pd.to_datetime(_s["time"].iloc[0], errors="coerce")
-                                      if "time" in _s else pd.NaT)
-                                casts.append((_c, _s.loc[_mk, "pres"].to_numpy(),
-                                              _s.loc[_mk, m].to_numpy(), _d))
+                                      if "time" in _s.columns else pd.NaT)
+                                if pd.notna(_d):
+                                    _lab += f" · {_d:%Y-%m-%d}"
+                                casts.append((
+                                    _lab, _s.loc[_mk, "pres"].to_numpy(),
+                                    _s.loc[_mk, m].to_numpy(),
+                                    _rank.get(_c, 0) / max(1, len(_pulled) - 1)))
                             if casts:
                                 series.append((m, casts))
                         if not series:
                             st.warning("No finite samples for these measurands.")
                         else:
                             _ncast = max(len(c) for _, c in series)
+                            _nsch = (raw_df["sampling"].nunique()
+                                     if "sampling" in raw_df.columns else 1)
                             st.plotly_chart(_casts_fig(series, _units), width="stretch")
                             st.caption(
                                 f"Every cast drawn separately, no averaging · "
-                                f"{_ncast} cast(s) per measurand · "
+                                f"{_ncast} cast(s) per measurand"
+                                + (f" ({_nsch} sampling schemes, drawn as separate "
+                                   "lines)" if _nsch > 1 else "")
+                                + " · "
                                 + ("dark to light = oldest to newest cycle."
                                    if len(series) == 1
                                    else "colored by measurand, each on its own x-axis."))
@@ -1980,7 +2029,8 @@ with tab_raw:
                     # Built once per pull and held in session_state: download_button
                     # takes its data eagerly, so encoding on every rerun would rebuild
                     # a multi-hundred-MB string each time a widget moved.
-                    _meta_cols = [c for c in ("cycle", "time", "lat", "lon", "pres")
+                    _meta_cols = [c for c in ("cycle", "n_prof", "sampling", "time",
+                                             "lat", "lon", "pres")
                                   if c in raw_df.columns]
                     _data_cols = [c for c in raw_df.columns if c not in _meta_cols]
                     _sig = (sel_wmo, tuple(_pulled), len(raw_df),
