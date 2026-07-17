@@ -101,6 +101,41 @@ TYPE_COLORS = {
 }
 TYPE_COLOR_OTHER = [150, 150, 150, 180]
 
+
+def _geo_fig(mp, projection="natural earth"):
+    """Global float map on a real projection instead of Web Mercator tiles.
+
+    Mercator's world is square while this slot is wide, so it can only crop or tile,
+    which is where the doubled world came from. It also cannot draw past ~85 deg and
+    inflates high latitudes, and these floats run from -69 to +84, so Mercator was
+    both cutting real floats off and overstating how densely the Southern Ocean is
+    sampled. A ~2:1 projection fits the slot exactly and shows every float once.
+
+    Plotly is already a dependency, and st.plotly_chart reports point clicks, so
+    click-to-open survives the switch."""
+    fig = go.Figure()
+    for kind in list(TYPE_COLORS) + ["_other"]:
+        sub = (mp[~mp["type"].isin(TYPE_COLORS)] if kind == "_other"
+               else mp[mp["type"] == kind])
+        if not len(sub):
+            continue
+        c = TYPE_COLOR_OTHER if kind == "_other" else TYPE_COLORS[kind]
+        fig.add_trace(go.Scattergeo(
+            lat=sub["lat"], lon=sub["lon"], mode="markers",
+            marker=dict(size=5, color=f"rgba({c[0]},{c[1]},{c[2]},{c[3] / 255:.2f})",
+                        line=dict(width=0)),
+            name=kind, customdata=sub[["wmo", "type"]].to_numpy(),
+            hovertemplate="float %{customdata[0]} · %{customdata[1]}<extra></extra>"))
+    fig.update_geos(projection_type=projection, showland=True, landcolor="#e6e6e6",
+                    showocean=True, oceancolor="#f5fafd", showcoastlines=True,
+                    coastlinecolor="#c9d6df", coastlinewidth=0.4, showframe=False,
+                    lataxis_range=[-90, 90], lonaxis_range=[-180, 180],
+                    bgcolor="rgba(0,0,0,0)")
+    fig.update_layout(height=500, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+                      dragmode="pan", paper_bgcolor="rgba(0,0,0,0)",
+                      clickmode="event+select")
+    return fig
+
 # ---- contact / feedback ------------------------------------------------------
 # Set ARGO_ISSUES_URL at deploy time (or edit the default) once the repo exists.
 # e.g. export ARGO_ISSUES_URL="https://github.com/<owner>/<repo>/issues"
@@ -996,6 +1031,24 @@ if True:   # there is always something to show: a lookup, or the browse view
             _fit_zoom = next((z for thr, z in [(1, 4), (3, 3.5), (8, 3), (20, 2.5),
                                                (50, 2), (120, 1.2)] if _span < thr), 0.9)
             _pt = pd.DataFrame({"lat": [lat_q], "lon": [lon_q]})
+        # Two maps for two jobs. Wide/global: a real projection, because Mercator
+        # cannot show it without tiling or cropping. Regional: keep deck.gl and the
+        # Carto basemap, where Mercator is fine and street context is genuinely useful.
+        _wide = not near_mode and _span > 60
+        if len(_mp) and _wide:
+            _gev = st.plotly_chart(
+                _geo_fig(_mp), width="stretch", on_select="rerun",
+                selection_mode="points", key="matches_geo",
+                config={"scrollZoom": True, "displayModeBar": False})
+            _gsel = getattr(_gev, "selection", None)
+            _gpts = ((_gsel.get("points") if isinstance(_gsel, dict)
+                      else getattr(_gsel, "points", None)) or [])
+            if _gpts:
+                _cd = (_gpts[0].get("customdata") if isinstance(_gpts[0], dict)
+                       else getattr(_gpts[0], "customdata", None))
+                if _cd:
+                    _map_wmo = str(_cd[0])
+        elif len(_mp):
             # id= is required for Streamlit to report pydeck selections
             _mev = st.pydeck_chart(pdk.Deck(
                 map_style=None,
@@ -1027,6 +1080,7 @@ if True:   # there is always something to show: a lookup, or the browse view
             _mhits = _mobjs.get("hits") or []
             if _mhits:
                 _map_wmo = str(_mhits[0].get("wmo"))
+        if len(_mp):
             # legend: only the types actually on this map, in the table's order
             def _dot(rgba, label):
                 return (f"<span style='display:inline-block;width:9px;height:9px;"
@@ -1100,9 +1154,16 @@ if True:   # there is always something to show: a lookup, or the browse view
         // the sig is embedded so this re-executes only when the search changes
         const _s = {abs(hash(sig)) % 10**8};
         const d = window.parent.document;
-        const el = d.querySelector("[data-testid='stDeckGlJsonChart']")
-                || d.querySelector("[data-testid='stDataFrame']");
-        if (el) el.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+        // the global map is a plotly geo chart and the regional one is deck.gl, so
+        // match either; retry briefly because the element may not be mounted yet
+        function go(n) {{
+          const el = d.querySelector("[data-testid='stDeckGlJsonChart'], "
+                                   + "[data-testid='stPlotlyChart']")
+                  || d.querySelector("[data-testid='stDataFrame']");
+          if (el) el.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+          else if (n > 0) setTimeout(function() {{ go(n - 1); }}, 200);
+        }}
+        go(12);
         </script>
         """, height=1)
     if st.session_state.get("_match_sig") != sig:
