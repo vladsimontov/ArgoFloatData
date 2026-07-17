@@ -924,12 +924,16 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
         st.session_state["_match_sig"] = sig
         st.session_state.pop("_last_row", None)
         st.session_state.pop("_last_map_wmo", None)
+    _before = st.session_state.get("wmo_pick")
+    # The table's selection is by row INDEX and is read-only, so it is read from the
+    # key used for the *previous* render, before any reordering below.
+    _mver = st.session_state.setdefault("matches_ver", 0)
+    _ms = st.session_state.get(f"matches_table_{_mver}")
     # map click (the pydeck chart above already reported this rerun's selection)
     if _map_wmo is not None and _map_wmo != st.session_state.get("_last_map_wmo"):
         st.session_state["_last_map_wmo"] = _map_wmo
         st.session_state["wmo_pick"] = _map_wmo
     # row checkbox: read the widget state recorded by the click that caused this rerun
-    _ms = st.session_state.get("matches_table")
     _seld = ((_ms.get("selection") if isinstance(_ms, dict)
               else getattr(_ms, "selection", None)) if _ms is not None else None)
     _selrows = ((_seld.get("rows", []) if isinstance(_seld, dict)
@@ -939,11 +943,22 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
             and _selrow0 != st.session_state.get("_last_row")):
         st.session_state["_last_row"] = _selrow0
         st.session_state["wmo_pick"] = str(show.iloc[_selrow0]["wmo"])
-    # Highlight the row of whichever float is open now. Styler colors are explicit,
-    # so the green holds in both light and dark mode.
     _open = st.session_state.get("wmo_pick")
-    _ix = (show.index[show["wmo"].astype(str) == str(_open)] if _open else [])
-    _hl = int(_ix[0]) if len(_ix) else None
+    # Streamlit can neither scroll a dataframe to a row nor tick its checkbox, so
+    # pin the open float to the top instead: on a 30-hit map search its row is
+    # otherwise far below the fold. Reordering would strand the index-based tick on
+    # the wrong float, so retire the old table (new key = fresh, empty selection)
+    # whenever the open float changes, and let the green row carry the selection.
+    if _open != _before:
+        st.session_state["matches_ver"] = _mver = _mver + 1
+        st.session_state.pop("_last_row", None)
+    if _open is not None:
+        _ix = show.index[show["wmo"].astype(str) == str(_open)]
+        if len(_ix):
+            show = pd.concat([show.loc[_ix], show.drop(index=_ix)]).reset_index(drop=True)
+    _hl = 0 if (_open is not None
+                and (show["wmo"].astype(str) == str(_open)).any()) else None
+    # Styler colors are explicit, so the green holds in both light and dark mode.
     _sty = show.style
     if serial_hit:
         _sty = _sty.set_properties(subset=["matched_on"],
@@ -953,7 +968,10 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
                                      if r.name == _hl else [""] * len(r)), axis=1)
     st.dataframe(_sty, width="stretch", height=220,
                  on_select="rerun", selection_mode="single-row",
-                 key="matches_table", column_config=_cfg)
+                 key=f"matches_table_{_mver}", column_config=_cfg)
+    if _open is not None and _hl is not None and loc_on:
+        st.caption(f"Float {_open} is pinned to the top and highlighted; the rest stay "
+                   "sorted by distance.")
 else:
     st.info("Enter a serial number, sensor model, float type, WMO, or a "
             "location in the sidebar.")
