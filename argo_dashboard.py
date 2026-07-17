@@ -993,8 +993,8 @@ if True:   # there is always something to show: a lookup, or the browse view
             # float would otherwise be one pixel lost in an ocean.
             _la = _mp["lat"].to_numpy("float64"); _lo = _mp["lon"].to_numpy("float64")
             _span = max(float(_la.max() - _la.min()), float(_lo.max() - _lo.min()), 0.5)
-            _fit_zoom = next((z for thr, z in [(1, 7), (3, 6), (8, 5), (20, 4),
-                                               (50, 3), (120, 1.4)] if _span < thr), 0.6)
+            _fit_zoom = next((z for thr, z in [(1, 4), (3, 3.5), (8, 3), (20, 2.5),
+                                               (50, 2), (120, 1.2)] if _span < thr), 0.9)
             _pt = pd.DataFrame({"lat": [lat_q], "lon": [lon_q]})
             # id= is required for Streamlit to report pydeck selections
             _mev = st.pydeck_chart(pdk.Deck(
@@ -1002,8 +1002,8 @@ if True:   # there is always something to show: a lookup, or the browse view
                 initial_view_state=pdk.ViewState(
                     latitude=float(lat_q) if near_mode else float(np.median(_la)),
                     longitude=float(lon_q) if near_mode else float(np.median(_lo)),
-                    zoom=(next((z for thr, z in [(150, 6), (400, 5), (900, 4),
-                                                 (2000, 3)] if radius_q < thr), 2)
+                    zoom=(next((z for thr, z in [(150, 5), (400, 4), (900, 3),
+                                                 (2000, 2)] if radius_q < thr), 1)
                           if near_mode else _fit_zoom)),
                 layers=[
                     pdk.Layer("ScatterplotLayer", id="hits", data=_mp,
@@ -1018,7 +1018,7 @@ if True:   # there is always something to show: a lookup, or the browse view
                                  radius_min_pixels=7, radius_max_pixels=11,
                                  pickable=False)])],
                 tooltip={"text": "float {wmo} · {type}" + ("\n{km away} km away" if near_mode else "")}),
-                height=340, on_select="rerun", selection_mode="single-object",
+                height=420, on_select="rerun", selection_mode="single-object",
                 key="matches_map")
             # clicking a dot opens that float, same as ticking its row
             _msel = getattr(_mev, "selection", None)
@@ -1087,6 +1087,24 @@ if True:   # there is always something to show: a lookup, or the browse view
     # Forget remembered clicks whenever the result set changes, and act only on a
     # *new* selection so the dropdown can still override the other two.
     sig = (q, model_q, type_q, near_mode, lat_q, lon_q, radius_q, active_only)
+    # Bring the map to the top when the search CHANGES, so results land as map above /
+    # table below instead of below a screenful of header. Deliberately not on first
+    # load (an arriving visitor should see the title) and not on every rerun, or
+    # opening a float would yank you back up away from the float you just opened.
+    if "_scroll_sig" not in st.session_state:
+        st.session_state["_scroll_sig"] = sig          # first load: record, don't move
+    elif st.session_state["_scroll_sig"] != sig:
+        st.session_state["_scroll_sig"] = sig
+        st.iframe(f"""
+        <script>
+        // the sig is embedded so this re-executes only when the search changes
+        const _s = {abs(hash(sig)) % 10**8};
+        const d = window.parent.document;
+        const el = d.querySelector("[data-testid='stDeckGlJsonChart']")
+                || d.querySelector("[data-testid='stDataFrame']");
+        if (el) el.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+        </script>
+        """, height=1)
     if st.session_state.get("_match_sig") != sig:
         st.session_state["_match_sig"] = sig
         st.session_state.pop("_last_row", None)
