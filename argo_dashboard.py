@@ -872,28 +872,31 @@ def floats_near(lat, lon, km):
 
 # resolve search -> candidate floats
 def search():
+    """Two modes, deliberately not mixed.
+
+    A typed WMO/serial is a JUMP: you named a float, so you get that float and every
+    filter is ignored. The subtler rule (bypass only the filters that default to ON)
+    was worse in practice: a stale Float type from an earlier browse made a valid WMO
+    return nothing, with no clue why.
+
+    With no identifier we are BROWSING, and the filters narrow the set."""
     df = sensors.copy()
+    if q.strip():
+        # OR across the three things a float can be named by, so nobody has to know
+        # whether 17106 is a WMO or a serial. regex=False: real serials contain
+        # characters that would otherwise be read as a pattern.
+        s = q.strip().lower()
+        return df[df["wmo"].astype(str).str.contains(s, regex=False)
+                  | df["sensor_serial_no"].fillna("").str.lower().str.contains(s, regex=False)
+                  | df["float_serial_no"].fillna("").str.lower().str.contains(s, regex=False)]
     if model_q != "(any)":
         df = df[df["sensor_model"].fillna("") == model_q]
-    if q.strip():
-        # identifier lookup: OR across the three things a float can be named by, so
-        # nobody has to know whether 17106 is a WMO or a serial. regex=False because
-        # real serials contain characters that would otherwise be read as a pattern.
-        s = q.strip().lower()
-        m = (df["wmo"].astype(str).str.contains(s, regex=False) |
-             df["sensor_serial_no"].fillna("").str.lower().str.contains(s, regex=False) |
-             df["float_serial_no"].fillna("").str.lower().str.contains(s, regex=False))
-        df = df[m]
     if type_q != "(any)":
         df = df[df["wmo"].astype(str).map(type_by_wmo).eq(type_q)]
-    if not q.strip():
-        # Browse filters. Skipped for a lookup: both default to ON, so leaving them in
-        # would silently hide a named float (16,038 of 20,345 floats are inactive, and
-        # a serial's float is rarely near the default point).
-        if active_only:
-            df = df[df["wmo"].astype(str).isin(active_wmo_set(ROOT, ACTIVE_DAYS))]
-        if near_mode:
-            df = df[df["wmo"].astype(str).isin(near_km)]
+    if active_only:
+        df = df[df["wmo"].astype(str).isin(active_wmo_set(ROOT, ACTIVE_DAYS))]
+    if near_mode:
+        df = df[df["wmo"].astype(str).isin(near_km)]
     return df
 
 near_km = floats_near(lat_q, lon_q, radius_q) if near_mode else {}
@@ -915,7 +918,7 @@ if True:   # there is always something to show: a lookup, or the browse view
                     f"**Sensor model** to `{_mm}` in the sidebar filters to list every "
                     "float carrying one.")
         else:
-            st.info(f"Nothing matched **{_qs}**. This box takes a WMO or a serial "
+            st.info(f"No float matches **{_qs}**. This box takes a WMO or a serial "
                     "number; for a sensor model or a float type, use the filters "
                     "below it. Serial formats vary by DAC, so try a shorter fragment.")
     # The box searches WMO and both serials at once, so every hit must say which of
@@ -965,17 +968,19 @@ if True:   # there is always something to show: a lookup, or the browse view
         show.insert(5, "km away", show["wmo"].astype(str).map(near_km).round(0))
         show = show.sort_values("km away").reset_index(drop=True)
     elif q.strip():
-        st.caption(f"Looking up “{q.strip()}” across the whole array. The location "
-                   "filter is ignored for a direct lookup, so a float is never hidden "
-                   "just because it is not near your search point.")
+        st.caption(f"Looking up “{q.strip()}” across the whole array. Filters are "
+                   "ignored for a direct lookup, so a float you name is never hidden "
+                   "by a filter you forgot was on. Clear the box to browse again.")
     if serial_hit:
         show.insert(6 if (browsing and near_mode) else 5, "matched_on",
                     show.pop("matched_on"))
-    # A spatial search deserves a spatial answer: plot the hits' last fixes with the
-    # search point, so the result reads as a map, not just a list.
+    # The map always shows whatever is currently matched: every active float on open,
+    # a narrower set as filters go on, a single float for a lookup. It used to be
+    # suppressed for lookups, back when it only meant "near this point".
     _map_wmo = None
-    if browsing and len(show):
-        _mp = show[["wmo", "type"] + (["km away"] if near_mode else [])].copy()
+    if len(show):
+        _mp = show[["wmo", "type"] + (["km away"] if "km away" in show.columns
+                                      else [])].copy()
         _mp["lat"] = _mp["wmo"].astype(str).map(
             dict(zip(floats["wmo"].astype(str), floats["last_lat"])))
         _mp["lon"] = _mp["wmo"].astype(str).map(
@@ -984,26 +989,34 @@ if True:   # there is always something to show: a lookup, or the browse view
         # list-valued column, so each dot takes its own type color
         _mp["color"] = [TYPE_COLORS.get(t, TYPE_COLOR_OTHER) for t in _mp["type"]]
         if len(_mp):
+            # Fit the view to the hits rather than always showing the globe: a single
+            # float would otherwise be one pixel lost in an ocean.
+            _la = _mp["lat"].to_numpy("float64"); _lo = _mp["lon"].to_numpy("float64")
+            _span = max(float(_la.max() - _la.min()), float(_lo.max() - _lo.min()), 0.5)
+            _fit_zoom = next((z for thr, z in [(1, 7), (3, 6), (8, 5), (20, 4),
+                                               (50, 3), (120, 1.4)] if _span < thr), 0.6)
             _pt = pd.DataFrame({"lat": [lat_q], "lon": [lon_q]})
             # id= is required for Streamlit to report pydeck selections
             _mev = st.pydeck_chart(pdk.Deck(
                 map_style=None,
                 initial_view_state=pdk.ViewState(
-                    latitude=float(lat_q) if near_mode else 15.0,
-                    longitude=float(lon_q) if near_mode else 0.0,
+                    latitude=float(lat_q) if near_mode else float(np.median(_la)),
+                    longitude=float(lon_q) if near_mode else float(np.median(_lo)),
                     zoom=(next((z for thr, z in [(150, 6), (400, 5), (900, 4),
                                                  (2000, 3)] if radius_q < thr), 2)
-                          if near_mode else 0.6)),
+                          if near_mode else _fit_zoom)),
                 layers=[
                     pdk.Layer("ScatterplotLayer", id="hits", data=_mp,
                               get_position="[lon, lat]",
                               get_fill_color="color", get_radius=18000,
-                              radius_min_pixels=4, pickable=True, auto_highlight=True),
+                              radius_min_pixels=4, radius_max_pixels=9,
+                              pickable=True, auto_highlight=True),
                     *([] if not near_mode else
                       [pdk.Layer("ScatterplotLayer", id="point", data=_pt,
                                  get_position="[lon, lat]",
                                  get_fill_color=[214, 40, 40], get_radius=26000,
-                                 radius_min_pixels=7, pickable=False)])],
+                                 radius_min_pixels=7, radius_max_pixels=11,
+                                 pickable=False)])],
                 tooltip={"text": "float {wmo} · {type}" + ("\n{km away} km away" if near_mode else "")}),
                 height=340, on_select="rerun", selection_mode="single-object",
                 key="matches_map")
@@ -1032,8 +1045,8 @@ if True:   # there is always something to show: a lookup, or the browse view
                 "<div style='font-size:0.95rem;opacity:0.85'>"
                 + " &nbsp;·&nbsp; ".join(_leg) + "</div>", unsafe_allow_html=True)
             st.caption(
-                (f"Every float here matches your filters, at its last known fix"
-                 if not near_mode else
+                (f"The {len(_mp):,} float(s) matching your search, at their last known "
+                 "fix" if not near_mode else
                  f"Each float's last known fix within {radius_q:,} km of "
                  f"({lat_q:.2f}, {lon_q:.2f})")
                 + " · blue = Core, green = BGC, darker = Deep · click a float to open "
