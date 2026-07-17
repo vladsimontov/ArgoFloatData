@@ -979,40 +979,51 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
         st.session_state["_match_sig"] = sig
         st.session_state.pop("_last_row", None)
         st.session_state.pop("_last_map_wmo", None)
-    _before = st.session_state.get("wmo_pick")
+        st.session_state.pop("_pin_wmo", None)
+        st.session_state["matches_shown"] = []
     # The table's selection is by row INDEX and is read-only, so it is read from the
     # key used for the *previous* render, before any reordering below.
     _mver = st.session_state.setdefault("matches_ver", 0)
     _ms = st.session_state.get(f"matches_table_{_mver}")
-    # map click (the pydeck chart above already reported this rerun's selection)
+    # The wmo order as actually DISPLAYED last render. A row click reports an index
+    # into that order, so it must be resolved against this and not against `show`,
+    # which is rebuilt unpinned each run: pinning shifts every row down by one, so
+    # using show.iloc[] here opened the wrong float.
+    _shown = st.session_state.get("matches_shown", [])
+    # map click (the pydeck chart above already reported this rerun's selection).
+    # Only a map click pins: its row is usually far below the fold. A row click
+    # needs no pinning and reordering under the cursor would just be jarring.
     if _map_wmo is not None and _map_wmo != st.session_state.get("_last_map_wmo"):
         st.session_state["_last_map_wmo"] = _map_wmo
         st.session_state["wmo_pick"] = _map_wmo
+        st.session_state["_pin_wmo"] = _map_wmo
     # row checkbox: read the widget state recorded by the click that caused this rerun
     _seld = ((_ms.get("selection") if isinstance(_ms, dict)
               else getattr(_ms, "selection", None)) if _ms is not None else None)
     _selrows = ((_seld.get("rows", []) if isinstance(_seld, dict)
                  else getattr(_seld, "rows", []) or []) if _seld is not None else [])
     _selrow0 = _selrows[0] if _selrows else None
-    if (_selrow0 is not None and _selrow0 < len(show)
+    if (_selrow0 is not None and _selrow0 < len(_shown)
             and _selrow0 != st.session_state.get("_last_row")):
         st.session_state["_last_row"] = _selrow0
-        st.session_state["wmo_pick"] = str(show.iloc[_selrow0]["wmo"])
+        st.session_state["wmo_pick"] = _shown[_selrow0]
     _open = st.session_state.get("wmo_pick")
-    # Streamlit can neither scroll a dataframe to a row nor tick its checkbox, so
-    # pin the open float to the top instead: on a 30-hit map search its row is
-    # otherwise far below the fold. Reordering would strand the index-based tick on
-    # the wrong float, so retire the old table (new key = fresh, empty selection)
-    # whenever the open float changes, and let the green row carry the selection.
-    if _open != _before:
+    # Streamlit can neither scroll a dataframe to a row nor tick its checkbox, so a
+    # map-clicked float is pinned to the top instead, otherwise its row is lost far
+    # below the fold. The pin survives later row clicks so the table stays put.
+    _pin = st.session_state.get("_pin_wmo")
+    if _pin is not None and (show["wmo"].astype(str) == str(_pin)).any():
+        _ix = show.index[show["wmo"].astype(str) == str(_pin)]
+        show = pd.concat([show.loc[_ix], show.drop(index=_ix)]).reset_index(drop=True)
+    # Retire the table whenever the displayed order changes: its selection is by row
+    # index, so a stale tick would otherwise sit on the wrong float.
+    _order = show["wmo"].astype(str).tolist()
+    if _order != _shown:
         st.session_state["matches_ver"] = _mver = _mver + 1
         st.session_state.pop("_last_row", None)
-    if _open is not None:
-        _ix = show.index[show["wmo"].astype(str) == str(_open)]
-        if len(_ix):
-            show = pd.concat([show.loc[_ix], show.drop(index=_ix)]).reset_index(drop=True)
-    _hl = 0 if (_open is not None
-                and (show["wmo"].astype(str) == str(_open)).any()) else None
+    st.session_state["matches_shown"] = _order
+    _hl = (_order.index(str(_open)) if _open is not None and str(_open) in _order
+           else None)
     # Styler colors are explicit, so the green holds in both light and dark mode.
     _sty = show.style
     if serial_hit:
@@ -1024,9 +1035,9 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
     st.dataframe(_sty, width="stretch", height=220,
                  on_select="rerun", selection_mode="single-row",
                  key=f"matches_table_{_mver}", column_config=_cfg)
-    if _open is not None and _hl is not None and loc_on:
-        st.caption(f"Float {_open} is pinned to the top and highlighted; the rest stay "
-                   "sorted by distance.")
+    if _pin is not None and _hl is not None and str(_pin) == str(_open):
+        st.caption(f"Float {_open} was picked on the map, so it is pinned to the top; "
+                   "the rest keep their order.")
 else:
     st.info("Enter a serial number, sensor model, float type, WMO, or a "
             "location in the sidebar.")
@@ -1820,6 +1831,18 @@ with tab_raw:
             if np.isfinite(_c) and int(_c) not in _by_cyc:
                 _by_cyc[int(_c)] = (_meta["time"][_i], _meta["lat"][_i], _meta["lon"][_i])
 
+        # Everything below is per-float and lives in session_state, so it MUST be
+        # dropped when the float changes: otherwise the previous float's pulled
+        # profiles stay on screen and read as if they belonged to this one.
+        if st.session_state.get("_raw_wmo") != sel_wmo:
+            st.session_state["_raw_wmo"] = sel_wmo
+            for _k in ("raw_data", "raw_units", "raw_report", "raw_csv",
+                       "raw_csv_sig", "raw_pick"):
+                st.session_state.pop(_k, None)
+            # never reuse a version, so the cycle table can't inherit stale ticks
+            st.session_state["raw_pick_ver"] = (
+                st.session_state.get("raw_pick_ver", 0) + 1)
+
         # ---- selection: checkboxes we can also drive from the quick-select buttons ----
         _sel = st.session_state.setdefault("raw_pick", {_cyc_vals[-1]})   # default: latest
         _ver = st.session_state.setdefault("raw_pick_ver", 0)
@@ -1857,7 +1880,7 @@ with tab_raw:
                                  errors="coerce"),
         })
         _ed = st.data_editor(
-            _tbl, hide_index=True, height=260, key=f"raw_tbl_{_ver}",
+            _tbl, hide_index=True, height=260, key=f"raw_tbl_{sel_wmo}_{_ver}",
             disabled=["cycle", "date", "lat", "lon"],
             column_config={
                 "pull": st.column_config.CheckboxColumn(
