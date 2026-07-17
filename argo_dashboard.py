@@ -89,6 +89,18 @@ REGIONS = {
 }
 REGION_DEFAULT = "Mediterranean (western)"
 
+# Map dot color per float type: blue = Core, green = BGC, and the darker shade of
+# each is its Deep variant. Deep is orthogonal to Core/BGC, so hue carries the
+# sensor payload and lightness carries the depth class, which keeps all four
+# readable at once. ColorBrewer Blues/Greens, RGBA.
+TYPE_COLORS = {
+    "Core": [107, 174, 214, 190],
+    "Core · Deep": [8, 69, 148, 220],
+    "BGC": [116, 196, 118, 190],
+    "BGC · Deep": [0, 90, 50, 220],
+}
+TYPE_COLOR_OTHER = [150, 150, 150, 180]
+
 # ---- contact / feedback ------------------------------------------------------
 # Set ARGO_ISSUES_URL at deploy time (or edit the default) once the repo exists.
 # e.g. export ARGO_ISSUES_URL="https://github.com/<owner>/<repo>/issues"
@@ -901,12 +913,14 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
     # search point, so the result reads as a map, not just a list.
     _map_wmo = None
     if loc_on and len(show):
-        _mp = show[["wmo", "km away"]].copy()
+        _mp = show[["wmo", "type", "km away"]].copy()
         _mp["lat"] = _mp["wmo"].astype(str).map(
             dict(zip(floats["wmo"].astype(str), floats["last_lat"])))
         _mp["lon"] = _mp["wmo"].astype(str).map(
             dict(zip(floats["wmo"].astype(str), floats["last_lon"])))
         _mp = _mp.dropna(subset=["lat", "lon"])
+        # list-valued column, so each dot takes its own type color
+        _mp["color"] = [TYPE_COLORS.get(t, TYPE_COLOR_OTHER) for t in _mp["type"]]
         if len(_mp):
             _pt = pd.DataFrame({"lat": [lat_q], "lon": [lon_q]})
             # id= is required for Streamlit to report pydeck selections
@@ -919,13 +933,13 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
                 layers=[
                     pdk.Layer("ScatterplotLayer", id="hits", data=_mp,
                               get_position="[lon, lat]",
-                              get_fill_color=[10, 110, 189, 160], get_radius=18000,
-                              radius_min_pixels=3, pickable=True, auto_highlight=True),
+                              get_fill_color="color", get_radius=18000,
+                              radius_min_pixels=4, pickable=True, auto_highlight=True),
                     pdk.Layer("ScatterplotLayer", id="point", data=_pt,
                               get_position="[lon, lat]",
                               get_fill_color=[214, 40, 40], get_radius=26000,
                               radius_min_pixels=7, pickable=False)],
-                tooltip={"text": "float {wmo}\n{km away} km away"}),
+                tooltip={"text": "float {wmo} · {type}\n{km away} km away"}),
                 height=340, on_select="rerun", selection_mode="single-object",
                 key="matches_map")
             # clicking a dot opens that float, same as ticking its row
@@ -935,10 +949,26 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
             _mhits = _mobjs.get("hits") or []
             if _mhits:
                 _map_wmo = str(_mhits[0].get("wmo"))
-            st.caption(f"🔴 your search point ({lat_q:.2f}, {lon_q:.2f}) · 🔵 each "
-                       f"float's last known fix within {radius_q:,} km · click a float "
-                       "to open it. Floats drift, so a fix is where it was last heard "
-                       "from, not where it is now.")
+            # legend: only the types actually on this map, in the table's order
+            def _dot(rgba, label):
+                return (f"<span style='display:inline-block;width:9px;height:9px;"
+                        f"border-radius:50%;vertical-align:middle;margin:0 4px 2px 0;"
+                        f"background:rgba({rgba[0]},{rgba[1]},{rgba[2]},"
+                        f"{rgba[3] / 255:.2f})'></span>{label}")
+            _present = [t for t in TYPE_COLORS if (_mp["type"] == t).any()]
+            _other = bool((~_mp["type"].isin(TYPE_COLORS)).any())
+            _leg = [_dot(TYPE_COLORS[t], f"{t} ({int((_mp['type'] == t).sum())})")
+                    for t in _present]
+            if _other:
+                _leg.append(_dot(TYPE_COLOR_OTHER, "other"))
+            _leg.append(_dot([214, 40, 40, 255], "your search point"))
+            st.markdown(
+                "<div style='font-size:0.95rem;opacity:0.85'>"
+                + " &nbsp;·&nbsp; ".join(_leg) + "</div>", unsafe_allow_html=True)
+            st.caption(f"Each float's last known fix within {radius_q:,} km of "
+                       f"({lat_q:.2f}, {lon_q:.2f}) · blue = Core, green = BGC, darker "
+                       "= Deep · click a float to open it. Floats drift, so a fix is "
+                       "where it was last heard from, not where it is now.")
     cap = "Select a row's checkbox (far left) to open that float ↓"
     if serial_hit:
         cap += "  ·  the highlighted **matched on** column shows what your serial hit"
