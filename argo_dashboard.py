@@ -771,6 +771,7 @@ loc_on = st.sidebar.checkbox(
 lat_q = lon_q = 0.0
 radius_q = 500
 active_only = True
+show_all = False
 if loc_on:
     _region = st.sidebar.selectbox(
         "Jump to a region", ["(custom)"] + list(REGIONS),
@@ -794,14 +795,23 @@ if loc_on:
                               step=0.5, format="%.2f", key="lat_q")
     lon_q = _lc2.number_input("Longitude", min_value=-180.0, max_value=180.0,
                               step=0.5, format="%.2f", key="lon_q")
+    show_all = st.sidebar.checkbox(
+        "Show every active float", value=False,
+        help=f"Ignore the point and radius and map the whole live array: every float "
+             f"that reported within {ACTIVE_DAYS} days, worldwide (~4,300). Inactive "
+             "floats are never included here.")
     radius_q = st.sidebar.slider("Within (km)", min_value=25, max_value=3000,
-                                 step=25, key="radius_q",
+                                 step=25, key="radius_q", disabled=show_all,
                                  help="Great-circle distance from the point above.")
     active_only = st.sidebar.checkbox(
-        "Active floats only", value=True,
+        "Active floats only", value=True, disabled=show_all,
         help=f"A float is active if it reported within {ACTIVE_DAYS} days. A last-known "
              "position is only meaningful for a float still reporting; an inactive "
              "float's last fix may be decades old. Untick for historical searches.")
+    if show_all:
+        # half the Earth's circumference: every float is within this of any point, so
+        # the same distance filter serves the global view with no special case
+        radius_q, active_only = 20100, True
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -821,6 +831,19 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
 
 
+@st.cache_data(show_spinner=False)
+def active_wmo_set(root, days):
+    """WMOs reporting within `days`. parse_argo_date is a per-row Python call, so
+    over 20k floats it costs ~0.6s: fine when a radius has already cut the list to
+    a handful, but not on every rerun of the whole-globe view. Cache it."""
+    _s, fl = load_tables(root)
+    if fl is None or "last_date" not in fl.columns:
+        return set()
+    age = (pd.Timestamp.now().normalize()
+           - pd.to_datetime(fl["last_date"].map(parse_argo_date), errors="coerce")).dt.days
+    return set(fl.loc[age.le(days).fillna(False), "wmo"].astype(str))
+
+
 def floats_near(lat, lon, km, active_only):
     """WMOs whose last known fix is within km of (lat, lon) -> {wmo: distance_km}.
     Pure index lookup: last_lat/last_lon are already in the crosswalk, so this
@@ -833,7 +856,9 @@ def floats_near(lat, lon, km, active_only):
                      f["last_lon"].to_numpy("float64"))
     f = f.assign(_km=d)
     f = f[f["_km"] <= km]
-    if active_only:
+    if active_only and len(f) > 500:      # whole-globe style query: use the cached set
+        f = f[f["wmo"].astype(str).isin(active_wmo_set(ROOT, ACTIVE_DAYS))]
+    elif active_only:
         _age = (pd.Timestamp.now().normalize()
                 - pd.to_datetime(f["last_date"].map(parse_argo_date),
                                  errors="coerce")).dt.days
@@ -928,17 +953,19 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
                 map_style=None,
                 initial_view_state=pdk.ViewState(
                     latitude=float(lat_q), longitude=float(lon_q),
-                    zoom=next((z for thr, z in [(150, 6), (400, 5), (900, 4),
-                                                (2000, 3)] if radius_q < thr), 2)),
+                    zoom=(1 if show_all else
+                          next((z for thr, z in [(150, 6), (400, 5), (900, 4),
+                                                 (2000, 3)] if radius_q < thr), 2))),
                 layers=[
                     pdk.Layer("ScatterplotLayer", id="hits", data=_mp,
                               get_position="[lon, lat]",
                               get_fill_color="color", get_radius=18000,
                               radius_min_pixels=4, pickable=True, auto_highlight=True),
-                    pdk.Layer("ScatterplotLayer", id="point", data=_pt,
-                              get_position="[lon, lat]",
-                              get_fill_color=[214, 40, 40], get_radius=26000,
-                              radius_min_pixels=7, pickable=False)],
+                    *([] if show_all else
+                      [pdk.Layer("ScatterplotLayer", id="point", data=_pt,
+                                 get_position="[lon, lat]",
+                                 get_fill_color=[214, 40, 40], get_radius=26000,
+                                 radius_min_pixels=7, pickable=False)])],
                 tooltip={"text": "float {wmo} · {type}\n{km away} km away"}),
                 height=340, on_select="rerun", selection_mode="single-object",
                 key="matches_map")
@@ -961,14 +988,19 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
                     for t in _present]
             if _other:
                 _leg.append(_dot(TYPE_COLOR_OTHER, "other"))
-            _leg.append(_dot([214, 40, 40, 255], "your search point"))
+            if not show_all:
+                _leg.append(_dot([214, 40, 40, 255], "your search point"))
             st.markdown(
                 "<div style='font-size:0.95rem;opacity:0.85'>"
                 + " &nbsp;·&nbsp; ".join(_leg) + "</div>", unsafe_allow_html=True)
-            st.caption(f"Each float's last known fix within {radius_q:,} km of "
-                       f"({lat_q:.2f}, {lon_q:.2f}) · blue = Core, green = BGC, darker "
-                       "= Deep · click a float to open it. Floats drift, so a fix is "
-                       "where it was last heard from, not where it is now.")
+            st.caption(
+                (f"Every active float worldwide, at its last known fix"
+                 if show_all else
+                 f"Each float's last known fix within {radius_q:,} km of "
+                 f"({lat_q:.2f}, {lon_q:.2f})")
+                + " · blue = Core, green = BGC, darker = Deep · click a float to open "
+                  "it. Floats drift, so a fix is where it was last heard from, not "
+                  "where it is now.")
     cap = "Select a row's checkbox (far left) to open that float ↓"
     if serial_hit:
         cap += "  ·  the highlighted **matched on** column shows what your serial hit"
@@ -1004,7 +1036,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
     # Forget remembered clicks whenever the result set changes, and act only on a
     # *new* selection so the dropdown can still override the other two.
     sig = (serial_q, wmo_q, model_q, type_q, loc_on, lat_q, lon_q, radius_q,
-           active_only)
+           active_only, show_all)
     if st.session_state.get("_match_sig") != sig:
         st.session_state["_match_sig"] = sig
         st.session_state.pop("_last_row", None)
