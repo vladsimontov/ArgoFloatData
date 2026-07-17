@@ -53,6 +53,11 @@ def get_root():
 
 ROOT = get_root()
 GOOD_QC = {1, 2, 5, 8}
+# A float counts as active if it reported a profile within this many days. Argo
+# floats surface about every 10 days, so this is several missed cycles. At 60 days
+# it marks ~4,300 of the ~20,300 indexed floats active, in line with the ~4,000
+# floats the Argo Program reports as the live array.
+ACTIVE_DAYS = 60
 
 # ---- contact / feedback ------------------------------------------------------
 # Set ARGO_ISSUES_URL at deploy time (or edit the default) once the repo exists.
@@ -728,14 +733,14 @@ type_by_wmo = {}
 if {"data_kind", "is_deep"}.issubset(floats.columns):
     type_by_wmo = {str(w): _float_type(dk, bool(d)) for w, dk, d in
                    zip(floats["wmo"], floats["data_kind"], floats["is_deep"])}
+# raw last_date per float; parsed lazily for only the rows actually shown, since
+# it is an Argo YYYYMMDDHHMMSS number that needs parse_argo_date, not a timestamp
+last_raw_by_wmo = (dict(zip(floats["wmo"].astype(str), floats["last_date"]))
+                   if "last_date" in floats.columns else {})
 
 if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
     n_floats = int(hits["wmo"].nunique())
     st.markdown(f"**{n_floats:,} float{'s' if n_floats != 1 else ''} found**")
-    unique_only = st.toggle(
-        "Show unique floats only", value=True,
-        help="On: one row per float (WMO), with how many sensors matched and their "
-             "models. Off: one row per matching sensor.")
     # When searching by serial, label what triggered each match (the sensor and its
     # serial, or the float serial) so the hit is visible even in the grouped view.
     serial_hit = bool(serial_q.strip())
@@ -748,32 +753,48 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
         hits = hits.assign(matched_on=(_snm + " · " + _ssn).where(
             _ssn.str.lower().str.contains(_sq, regex=False), "float s/n " + _fsn))
 
-    if unique_only:
-        agg = dict(float_serial_no=("float_serial_no", "first"),
-                   dac=("dac", "first"),
-                   n_sensors=("sensor", "nunique"),
-                   sensor_models=("sensor_model",
-                                  lambda s: ", ".join(sorted(s.dropna().unique()))))
-        if serial_hit:
-            agg["matched_on"] = ("matched_on",
-                                 lambda s: ", ".join(sorted({x for x in s if x})))
-        show = hits.groupby("wmo", as_index=False).agg(**agg).reset_index(drop=True)
-    else:
-        cols = ["wmo", "float_serial_no", "sensor", "sensor_model",
-                "sensor_maker", "sensor_serial_no", "dac"]
-        if serial_hit:
-            cols.append("matched_on")
-        show = hits[cols].reset_index(drop=True)
-    show.insert(1, "type", show["wmo"].astype(str).map(type_by_wmo).fillna("-"))
+    # always one row per float (WMO), with how many sensors matched and their models
+    agg = dict(float_serial_no=("float_serial_no", "first"),
+               dac=("dac", "first"),
+               n_sensors=("sensor", "nunique"),
+               sensor_models=("sensor_model",
+                              lambda s: ", ".join(sorted(s.dropna().unique()))))
     if serial_hit:
-        show.insert(2, "matched_on", show.pop("matched_on"))   # prominent: right after type
+        agg["matched_on"] = ("matched_on",
+                             lambda s: ", ".join(sorted({x for x in s if x})))
+    show = hits.groupby("wmo", as_index=False).agg(**agg).reset_index(drop=True)
+    show.insert(1, "type", show["wmo"].astype(str).map(type_by_wmo).fillna("-"))
+    # Still reporting? Argo floats surface roughly every 10 days, so a gap much
+    # longer than that means the float has almost certainly stopped.
+    _lp = pd.to_datetime(
+        show["wmo"].astype(str).map(last_raw_by_wmo).map(parse_argo_date),
+        errors="coerce")
+    _age = (pd.Timestamp.now().normalize() - _lp).dt.days
+    show.insert(2, "status", np.where(_lp.isna(), "unknown",
+                                      np.where(_age <= ACTIVE_DAYS,
+                                               "🟢 active", "⚪ inactive")))
+    show.insert(3, "last profile", _lp)
+    if serial_hit:
+        show.insert(4, "matched_on", show.pop("matched_on"))   # prominent, near the front
     cap = "Select a row's checkbox (far left) to open that float ↓"
     if serial_hit:
         cap += "  ·  the highlighted **matched on** column shows what your serial hit"
     st.caption(cap)
-    _cfg = ({"matched_on": st.column_config.TextColumn(
-                "matched on", help="Which sensor serial (or the float serial) your "
-                                   "search matched.")} if serial_hit else None)
+    _cfg = {
+        "status": st.column_config.TextColumn(
+            "status", help=f"Active = this float reported a profile within the last "
+                           f"{ACTIVE_DAYS} days. Argo floats surface about every 10 "
+                           "days, so a longer gap almost always means the float has "
+                           "stopped reporting. Taken from the index's last profile "
+                           "date, which is refreshed daily."),
+        "last profile": st.column_config.DatetimeColumn(
+            "last profile", format="YYYY-MM-DD",
+            help="Date of the most recent profile this float reported."),
+    }
+    if serial_hit:
+        _cfg["matched_on"] = st.column_config.TextColumn(
+            "matched on", help="Which sensor serial (or the float serial) your "
+                               "search matched.")
     # Highlight the currently-selected row green. Read the selection recorded before
     # this rerun (from the checkbox click that triggered it); Styler colors are
     # explicit, so the green holds in both light and dark mode.
@@ -797,7 +818,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
     # Clicking a table row opens that float by pre-filling the picker below.
     # Forget the remembered click whenever the result set changes, and act only
     # on a *new* row so the dropdown can still override a row selection.
-    sig = (serial_q, wmo_q, model_q, unique_only)
+    sig = (serial_q, wmo_q, model_q)
     if st.session_state.get("_match_sig") != sig:
         st.session_state["_match_sig"] = sig
         st.session_state.pop("_last_row", None)
