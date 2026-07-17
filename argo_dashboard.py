@@ -748,17 +748,29 @@ nprof_by_wmo = (dict(zip(floats["wmo"].astype(str), floats["n_profiles"]))
                 if "n_profiles" in floats.columns else {})
 
 st.sidebar.header("Find a float")
-# Browsing comes first: someone arriving cold has no serial number, so leading with
-# the serial box hands them the one control they cannot use. Serial lookup is the
-# power feature and lives below. Every control here is a FILTER and they combine
-# (AND), which the old "...or" labels claimed the opposite of.
-st.sidebar.markdown("**Browse the array**")
+# Two different jobs, kept apart. A WMO or a serial IDENTIFIES a float, so it is one
+# free-text box; float type, sensor model and location FILTER a set, so they narrow
+# whatever the box found. A serial and a WMO can look alike (17106 could be either),
+# so rather than make anyone choose a field, search both and let the matched on
+# column say which one hit.
+q = st.sidebar.text_input(
+    "WMO or serial number", placeholder="e.g. 6903132 or 17106",
+    help="One box for either. Matches a WMO, a SENSOR_SERIAL_NO or a FLOAT_SERIAL_NO "
+         "(case-insensitive substring), and the results say which one matched. Argo "
+         "has no serial-to-float index, so this one is built from every float's "
+         "meta.nc.")
+
+st.sidebar.markdown("**Filters**")
+st.sidebar.caption("Narrow the results. They combine.")
 _type_opts = sorted({t for t in type_by_wmo.values() if t and t != "-"})
 type_q = st.sidebar.selectbox(
     "Float type", ["(any)"] + _type_opts,
     help="Core = temperature/salinity. BGC = biogeochemical sensors on board. "
          "Deep = profiles below 4000 m (SBE61 floats reach 6000 m). Matches the "
          "type column in the results.")
+models = ["(any)"] + sorted(sensors["sensor_model"].dropna().unique().tolist())
+model_q = st.sidebar.selectbox("Sensor model", models,
+                               help="e.g. SBE41, SBE41CP for the CTD.")
 loc_on = st.sidebar.checkbox(
     "Search near a position", value=True,
     help="Find floats whose LAST KNOWN position is near a point, or map the whole "
@@ -814,18 +826,6 @@ if loc_on:
         # the same distance filter serves the global view with no special case
         radius_q, active_only = 20100, True
 
-st.sidebar.markdown("**Look up a specific float**")
-serial_q = st.sidebar.text_input(
-    "Serial number contains", placeholder="e.g. 17106 or P41308-22EU002",
-    help="Matches SENSOR_SERIAL_NO or FLOAT_SERIAL_NO (case-insensitive substring). "
-         "Argo has no serial-to-float index, so this one is built from every float's "
-         "meta.nc.")
-models = ["(any)"] + sorted(sensors["sensor_model"].dropna().unique().tolist())
-model_q = st.sidebar.selectbox("Sensor model", models,
-                               help="e.g. SBE41, SBE41CP for the CTD.")
-wmo_q = st.sidebar.text_input("WMO number", placeholder="e.g. 6903132",
-                              help="Jump straight to a float.")
-st.sidebar.caption("These filters combine: a type plus a location narrows to both.")
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -885,16 +885,21 @@ def search():
     df = sensors.copy()
     if model_q != "(any)":
         df = df[df["sensor_model"].fillna("") == model_q]
-    if serial_q.strip():
-        s = serial_q.strip().lower()
-        m = (df["sensor_serial_no"].fillna("").str.lower().str.contains(s) |
-             df["float_serial_no"].fillna("").str.lower().str.contains(s))
+    if q.strip():
+        # identifier lookup: OR across the three things a float can be named by, so
+        # nobody has to know whether 17106 is a WMO or a serial. regex=False because
+        # real serials contain characters that would otherwise be read as a pattern.
+        s = q.strip().lower()
+        m = (df["wmo"].astype(str).str.contains(s, regex=False) |
+             df["sensor_serial_no"].fillna("").str.lower().str.contains(s, regex=False) |
+             df["float_serial_no"].fillna("").str.lower().str.contains(s, regex=False))
         df = df[m]
-    if wmo_q.strip():
-        df = df[df["wmo"].astype(str).str.contains(wmo_q.strip())]
     if type_q != "(any)":
         df = df[df["wmo"].astype(str).map(type_by_wmo).eq(type_q)]
-    if loc_on:
+    if loc_on and not q.strip():
+        # A typed WMO/serial is a jump to a named float, so a location filter the user
+        # never opted into must not hide it. Without this, searching a serial for a
+        # float outside the default region silently returned nothing.
         df = df[df["wmo"].astype(str).isin(near_km)]
     return df
 
@@ -903,20 +908,38 @@ hits = search()
 
 st.subheader("Matches")
 
-if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" or loc_on:
+if q.strip() or model_q != "(any)" or type_q != "(any)" or loc_on:
     n_floats = int(hits["wmo"].nunique())
     st.markdown(f"**{n_floats:,} float{'s' if n_floats != 1 else ''} found**")
-    # When searching by serial, label what triggered each match (the sensor and its
-    # serial, or the float serial) so the hit is visible even in the grouped view.
-    serial_hit = bool(serial_q.strip())
+    if n_floats == 0 and q.strip():
+        # A dead end should say what to do next. Typing a sensor model into the
+        # identifier box is the obvious mistake, so name it rather than just
+        # returning nothing.
+        _qs = q.strip()
+        _mm = next((m for m in models[1:] if m.lower() == _qs.lower()), None)
+        if _mm:
+            st.info(f"**{_qs}** is a sensor model, not a WMO or serial number. Set "
+                    f"**Sensor model** to `{_mm}` in the sidebar filters to list every "
+                    "float carrying one.")
+        else:
+            st.info(f"Nothing matched **{_qs}**. This box takes a WMO or a serial "
+                    "number; for a sensor model or a float type, use the filters "
+                    "below it. Serial formats vary by DAC, so try a shorter fragment.")
+    # The box searches WMO and both serials at once, so every hit must say which of
+    # them it was: that is the whole reason the user never had to pick a field.
+    serial_hit = bool(q.strip())
     if serial_hit:
-        _sq = serial_q.strip().lower()
+        _sq = q.strip().lower()
         _ssn = hits["sensor_serial_no"].fillna("").astype(str)
         _fsn = hits["float_serial_no"].fillna("").astype(str)
+        _wmo = hits["wmo"].astype(str)
         _snm = hits["sensor_model"].fillna("").astype(str)
         _snm = _snm.where(_snm.ne(""), hits["sensor"].fillna("sensor").astype(str))
-        hits = hits.assign(matched_on=(_snm + " · " + _ssn).where(
-            _ssn.str.lower().str.contains(_sq, regex=False), "float s/n " + _fsn))
+        hits = hits.assign(matched_on=np.where(
+            _ssn.str.lower().str.contains(_sq, regex=False), _snm + " · " + _ssn,
+            np.where(_fsn.str.lower().str.contains(_sq, regex=False),
+                     "float s/n " + _fsn,
+                     np.where(_wmo.str.contains(_sq, regex=False), "WMO " + _wmo, ""))))
 
     # always one row per float (WMO), with how many sensors matched and their models
     agg = dict(float_serial_no=("float_serial_no", "first"),
@@ -942,16 +965,21 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
     show.insert(4, "profiles",
                 pd.to_numeric(show["wmo"].astype(str).map(nprof_by_wmo),
                               errors="coerce").astype("Int64"))
-    if loc_on:
+    browsing = loc_on and not q.strip()
+    if browsing:
         # distance from the searched point; nearest first
         show.insert(5, "km away", show["wmo"].astype(str).map(near_km).round(0))
         show = show.sort_values("km away").reset_index(drop=True)
+    elif loc_on and q.strip():
+        st.caption(f"Looking up “{q.strip()}” across the whole array. The location "
+                   "filter is ignored for a direct lookup, so a float is never hidden "
+                   "just because it is not near your search point.")
     if serial_hit:
-        show.insert(6 if loc_on else 5, "matched_on", show.pop("matched_on"))
+        show.insert(6 if browsing else 5, "matched_on", show.pop("matched_on"))
     # A spatial search deserves a spatial answer: plot the hits' last fixes with the
     # search point, so the result reads as a map, not just a list.
     _map_wmo = None
-    if loc_on and len(show):
+    if browsing and len(show):
         _mp = show[["wmo", "type", "km away"]].copy()
         _mp["lat"] = _mp["wmo"].astype(str).map(
             dict(zip(floats["wmo"].astype(str), floats["last_lat"])))
@@ -1017,7 +1045,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
                   "where it is now or where it was during its lifetime")
     cap = "Select a row's checkbox (far left) to open that float ↓"
     if serial_hit:
-        cap += "  ·  the highlighted **matched on** column shows what your serial hit"
+        cap += "  ·  the highlighted **matched on** column shows what your search hit"
     st.caption(cap)
     _cfg = {
         "status": st.column_config.TextColumn(
@@ -1041,16 +1069,16 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
     }
     if serial_hit:
         _cfg["matched_on"] = st.column_config.TextColumn(
-            "matched on", help="Which sensor serial (or the float serial) your "
-                               "search matched.")
+            "matched on", help="Which identifier your search hit: a sensor serial, "
+                               "the float serial, or the WMO.")
     wmos = sorted(hits["wmo"].astype(str).unique().tolist())
     # A float opens from three places: a map dot, a row checkbox, or the dropdown.
     # Resolve them all here, BEFORE the table renders, so the green highlight tracks
     # whatever is actually open on this same rerun rather than lagging one click.
     # Forget remembered clicks whenever the result set changes, and act only on a
     # *new* selection so the dropdown can still override the other two.
-    sig = (serial_q, wmo_q, model_q, type_q, loc_on, lat_q, lon_q, radius_q,
-           active_only, show_all)
+    sig = (q, model_q, type_q, loc_on, lat_q, lon_q, radius_q, active_only,
+           show_all)
     if st.session_state.get("_match_sig") != sig:
         st.session_state["_match_sig"] = sig
         st.session_state.pop("_last_row", None)
@@ -1115,8 +1143,8 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
         st.caption(f"Float {_open} was picked on the map, so it is pinned to the top; "
                    "the rest keep their order.")
 else:
-    st.info("Pick a float type or tick **Search near a position** in the sidebar to "
-            "browse the array, or look up a specific float by serial number or WMO.")
+    st.info("Tick **Search near a position** in the sidebar to browse the array on a "
+            "map, or type a WMO or serial number to jump to a float.")
     wmos = []
 
 if not wmos:
