@@ -1,7 +1,8 @@
 # 🌊 Argo Float Data Explorer
 
 Search and visualize the **entire global Argo float array** of BGC, core, and
-Deep Argo (SBE61 6000 m) floats, by sensor **serial number**, model, WMO, or region.
+Deep Argo (SBE61 6000 m) floats, by sensor **serial number**, model, float type, WMO,
+or **location**.
 Look up a CTD serial like `SBE41` or `SBE61`, find the float it belongs to, every
 other sensor on board, where it's been, and what it's measured, then plot
 profiles, depth-time sections, T-S diagrams, and multi-year trends. Float data is
@@ -20,30 +21,63 @@ searchable from a repo just a few megabytes in size.
 
 ## What it does
 
-- **Find any float:** search **20,321 floats** by CTD/sensor serial number, sensor
-  model (SBE41, SBE41CP, **SBE61**, optodes, ECO, SUNA…), WMO number, or region.
-  Click a match to open it; a serial search adds a highlighted **matched on** column
-  showing exactly which sensor + serial (or float serial) triggered the hit. Argo has
-  no native serial→float index, so this builds one from every float's `meta.nc`.
+### Find a float, four ways
+
+- **By serial number:** any part of a sensor serial or float serial, case-insensitive.
+  Argo has no native serial→float index, so this builds one from every float's
+  `meta.nc`. A serial search adds a highlighted **matched on** column naming exactly
+  which sensor + serial triggered the hit.
+- **By sensor model or float type:** SBE41, SBE41CP, **SBE61**, optodes, ECO, SUNA and
+  the rest; or filter to **Core**, **BGC**, and their **Deep** variants.
+- **By WMO number**, to jump straight to a float.
+- **By location:** give a latitude/longitude and a radius (25 to 3000 km) and get every
+  float whose **last known fix** falls inside it, sorted nearest first with a **km away**
+  column. **21 region presets** (Labrador Sea, Gulf Stream, Station ALOHA, Kuroshio,
+  Drake Passage, Kerguelen, the Mediterranean and more) fill in the coordinates for you;
+  each one is picked from the index so it always has floats in it. Or tick **Show every
+  active float** to map the whole live array at once.
+
+Results land in a table with one row per float: **type**, **status**, **last profile**
+date, **profiles** count, serial, DAC and matching sensors. Floats are marked
+**active** when they have reported within **60 days** (they normally surface about every
+10 days), so you can tell a working float from one that died in 2003. Roughly **4,300**
+of the ~20,300 indexed floats are active at any time.
+
+Location searches also draw a **map of the hits**, colored by type (blue Core, green
+BGC, darker shades for the Deep variants) with your search point in red. **Click any
+float on the map to open it.**
+
+### Then dig into it
+
 - **Float dossier**, a structured **Identity / Deployment / Project** panel: float
   serial, WMO, DAC, platform type/maker, **all sensors**, measurands on board,
   **days deployed**, last position, an approximate **region** (climate band + ocean
-  basin), and which data file backs it (BGC vs core).
-- **Interactive plots**, grouped into tabs (Overview · Trajectory · Profile & Trend · T-S · Raw):
+  basin), and which data file backs it (BGC vs core). Plus a per-parameter **QC flag
+  breakdown** (good / questionable / bad %, total flagged, per-cycle A-F grades) and the
+  float's **calibration coefficients**.
+- **Interactive plots**, grouped into six tabs (Overview · Trajectory · Profile & Trend
+  · Overlay · T-S · Raw):
   - **Trajectory map:** the float's drift track on an interactive **basemap**
     (pydeck + Carto tiles), with launch and latest positions marked.
-  - **Vertical profiles:** real-time or `*_ADJUSTED`, QC-flag aware, colored by date.
+  - **Vertical profiles:** **Real-time**, **QC-filtered** or **Adjusted** (`*_ADJUSTED`,
+    the default), colored by date.
   - **Depth-time section** (Hovmöller) with a mixed-layer-depth overlay.
+  - **Overlay:** up to **4 measurands at once** on one shared pressure axis, each with
+    its own color-matched x-axis, over any cycle range, with an optional **±1σ** band.
   - **Temperature-Salinity diagram** with σ₀ density contours.
   - **Time series at a chosen pressure:** nearest-level, colored by season, with a
     **Sen's-slope + Mann-Kendall** trend test and optional deseasonalizing.
-  - **Raw per-cycle diagnostics** (B-files): a single cycle's raw NetCDF pulled from
-    the GDAC, with the intermediate sensor signals (raw fluorescence, backscatter,
-    optode phase) that are not carried into the synthetic product.
+  - **Raw per-cycle diagnostics** (B-files): pull **one cycle or hundreds** straight from
+    the GDAC (tick them, or use Latest / All / Every Nth) with a live download progress
+    bar, and plot the **intermediate sensor signals** (raw fluorescence, backscatter,
+    optode phase) that never reach the synthetic product. View every cast separately,
+    colored by date to expose sensor drift, or as a mean ±1σ.
 - **TEOS-10 derived fields** (via `gsw`): potential density σ₀, conservative &
   potential temperature, absolute salinity, apparent oxygen utilization, and mixed
   layer depth, all computed on the fly.
-- **Download** any parameter as CSV, or the full float as NetCDF.
+- **Download** any parameter as CSV, the time series as CSV, the full float as NetCDF, or
+  **every raw level you pulled as one CSV**, carrying every parameter the raw files report
+  plus each one's QC flag, ready for MATLAB, pandas or R.
 - Every plot is stamped with the float's **WMO + latest-profile date** so a chart is
   never mistaken for another float or a stale view.
 
@@ -82,7 +116,7 @@ pip install -r requirements.txt
 streamlit run argo_dashboard.py -- --root ./argo_local
 ```
 
-Search works for all ~20,000 floats out of the box; each float's data is fetched from
+Search works for the whole ~20,300-float array out of the box; each float's data is fetched from
 the GDAC the first time you open it.
 
 ### Rebuild or scope the index yourself (optional)
@@ -137,8 +171,10 @@ it doesn't rehost it.
 - **The GDAC is mutable:** delayed-mode QC and reprocessing rewrite old files. The
   index refreshes daily; for reproducible figures, pin a monthly
   [DOI snapshot](https://doi.org/10.17882/42182).
-- **Synthetic/physical profiles, not raw counts.** Sprof/prof are QC'd, science-ready
-  profiles; intermediate raw sensor signals live in the B-files (not used here).
+- **Two levels of data.** The main tabs read the QC'd, science-ready Sprof/prof
+  profiles. The **Raw tab** goes a level deeper, pulling the per-cycle B-files that
+  carry the intermediate sensor signals (raw fluorescence, optode phase) the synthetic
+  product never exposes, unadjusted and unfiltered.
 - **Serial matching is fuzzy:** formats vary by DAC (padding, prefixes, `SBE41` vs
   `SBE41CP`). Search is case-insensitive substring; confirm a hit with model + maker.
 - **Defaults encode QC guidance, not a fix.** The UI prefers `*_ADJUSTED`, keeps QC

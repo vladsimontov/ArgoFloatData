@@ -54,6 +54,19 @@ jobs:
           python build_crosswalk.py --root ./argo_local
           python build_api.py --root ./argo_local --out ./docs/api
 
+      # The API files are rebuilt above, so the sitemap's lastmod is only honest if it
+      # moves with them. Stamp it here rather than by hand, where it went 12 days stale.
+      - name: Stamp sitemap lastmod
+        run: |
+          python - <<'PY'
+          import re, datetime, pathlib
+          p = pathlib.Path("docs/sitemap.xml")
+          today = datetime.date.today().isoformat()
+          p.write_text(re.sub(r"<lastmod>[^<]*</lastmod>",
+                              f"<lastmod>{today}</lastmod>", p.read_text()))
+          print("sitemap lastmod ->", today)
+          PY
+
       - name: Commit updated index if new floats appeared
         run: |
           git config user.name  "github-actions[bot]"
@@ -61,7 +74,7 @@ jobs:
           # stage only the data parquets; manifest.json holds a timestamp that
           # changes every run, so add it only when the parquets actually changed
           git add argo_local/sensors.parquet argo_local/floats.parquet \
-                  argo_local/bgc_float_index.parquet docs/api/
+                  argo_local/bgc_float_index.parquet docs/api/ docs/sitemap.xml
           if git diff --cached --quiet; then
             echo "No new floats this run; nothing to commit."
             exit 0

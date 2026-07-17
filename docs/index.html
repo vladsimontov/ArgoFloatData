@@ -11,8 +11,8 @@
 <!-- ============================================================= -->
 
 <title>Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles</title>
-<meta name="description" content="Find an Argo float by its CTD/sensor serial number, model, WMO, or region. Search the entire array of BGC, core, and Deep Argo (SBE61 6000 m) floats, and visualize profiles, depth-time sections, T-S diagrams, trends, and raw per-cycle sensor diagnostics (B-file), with data streamed live from the Argo GDAC.">
-<meta name="keywords" content="Argo, Argo floats, BGC-Argo, Deep Argo, SBE61, core Argo, ocean float data, oceanography, temperature salinity profiles, ocean profiling floats, GDAC, TEOS-10, ocean observing, float serial number, WMO, biogeochemical Argo, ocean data visualization, raw Argo data, Argo B-file, raw sensor data, intermediate parameters, per-cycle diagnostics, raw fluorescence, optode phase">
+<meta name="description" content="Find Argo floats near any latitude and longitude, map every active float worldwide, or search by CTD/sensor serial number, model, float type or WMO. Covers the entire array of BGC, core and Deep Argo (SBE61 6000 m) floats, with profiles, depth-time sections, T-S diagrams, multi-year trends and raw per-cycle B-file sensor diagnostics streamed live from the Argo GDAC. Free, no account.">
+<meta name="keywords" content="Argo, Argo floats, Argo float map, map of active Argo floats, find Argo floats by location, Argo floats near me, Argo float locations, active Argo floats, BGC-Argo, BGC Argo map, Deep Argo, SBE61, core Argo, ocean float data, oceanography, temperature salinity profiles, ocean profiling floats, GDAC, TEOS-10, ocean observing, float serial number, WMO, biogeochemical Argo, ocean data visualization, raw Argo data, Argo B-file, raw sensor data, intermediate parameters, per-cycle diagnostics, raw fluorescence, optode phase, download Argo data CSV, Argo float CSV export">
 <meta name="author" content="Vlad Simontov">
 <link rel="canonical" href="https://vladsimontov.github.io/ArgoFloatData/">
 <meta name="robots" content="index, follow">
@@ -21,12 +21,12 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Argo Float Data Explorer">
 <meta property="og:title" content="Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles">
-<meta property="og:description" content="Find an Argo float by its CTD/sensor serial number, model, or WMO. Search the entire array of BGC, core, and Deep Argo (SBE61 6000 m) floats, and visualize profiles, sections, T-S diagrams, trends, and raw per-cycle B-file diagnostics.">
+<meta property="og:description" content="Find Argo floats near any location, map every active float worldwide, or search by CTD serial number, model, float type or WMO. BGC, core and Deep Argo, with profiles, T-S diagrams, trends and raw B-file diagnostics live from the GDAC.">
 <meta property="og:url" content="https://vladsimontov.github.io/ArgoFloatData/">
 <meta property="og:image" content="https://vladsimontov.github.io/ArgoFloatData/og-image.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Argo Float Data Explorer: BGC, Core &amp; Deep Argo profiles">
-<meta name="twitter:description" content="Find an Argo float by its CTD/sensor serial number, model, or WMO, across the entire array (BGC, core, Deep Argo / SBE61 6000 m). Live data from the GDAC.">
+<meta name="twitter:description" content="Find Argo floats near any location, map every active float worldwide, or search by CTD serial, model or WMO. BGC, core and Deep Argo, live from the GDAC.">
 <meta name="twitter:image" content="https://vladsimontov.github.io/ArgoFloatData/og-image.png">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
@@ -37,14 +37,86 @@
   "@context": "https://schema.org",
   "@type": "WebApplication",
   "name": "Argo Float Data Explorer",
-  "description": "Search and visualize the entire Argo float array of BGC, core, and Deep Argo (SBE61 6000 m) floats, by sensor serial number, model, WMO, or region.",
-  "url": "https://argofloat.streamlit.app",
+  "description": "Find Argo floats near any latitude and longitude, map every active float worldwide, or search the entire array of BGC, core and Deep Argo (SBE61 6000 m) floats by sensor serial number, model, float type or WMO.",
+  "url": "https://vladsimontov.github.io/ArgoFloatData/",
+  "installUrl": "https://argofloat.streamlit.app",
   "applicationCategory": "ScienceApplication",
   "operatingSystem": "Any (web browser)",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "isBasedOn": "https://doi.org/10.17882/42182",
-  "keywords": "Argo, BGC-Argo, Deep Argo, SBE61, oceanography, ocean float data",
+  "keywords": "Argo, BGC-Argo, Deep Argo, SBE61, oceanography, ocean float data, Argo float map, active Argo floats, find Argo floats by location",
+  "featureList": [
+    "Find Argo floats near a latitude and longitude within a chosen radius",
+    "Map every active Argo float worldwide, colored by float type",
+    "Search by CTD or sensor serial number across the whole array",
+    "Filter by float type: Core, BGC, Deep Argo",
+    "Search by WMO number or sensor model",
+    "See whether a float is still active from its last profile date",
+    "Vertical profiles, depth-time sections, T-S diagrams and mixed layer depth",
+    "Overlay up to four measurands on one pressure axis",
+    "Sen's slope and Mann-Kendall trend tests at a chosen pressure",
+    "Raw per-cycle B-file diagnostics with intermediate sensor signals",
+    "Export profiles and raw levels as CSV or NetCDF"
+  ],
   "license": "https://opensource.org/licenses/MIT"
+}
+</script>
+
+<!-- FAQ structured data: real questions this tool answers, eligible for rich results -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "How do I find Argo floats near a location?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Enter a latitude and longitude and a radius from 25 to 3000 km. The Argo Float Data Explorer lists every float whose last known fix falls inside that circle, sorted nearest first with the distance in kilometres, and maps them so you can click any float to open it. There are also 21 region presets such as the Labrador Sea, Gulf Stream, Station ALOHA, the Kuroshio and the Drake Passage."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How many Argo floats are active right now?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Roughly 4,300 Argo floats are currently active, out of about 20,300 ever deployed. A float counts as active if it has reported a profile within the last 60 days. Argo floats surface about every 10 days, so a longer gap almost always means the float has stopped reporting. You can map every active float worldwide in one click."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I find which Argo float a CTD serial number belongs to?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Argo has no native serial-to-float index, so this tool builds one from every float's meta.nc file. Enter any part of a sensor serial or float serial number, such as an SBE41, SBE41CP or SBE61 CTD, and it returns the float, every other sensor on board, where it has been and what it has measured."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the difference between Core, BGC and Deep Argo floats?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Core Argo floats measure temperature and salinity to about 2000 m. BGC (biogeochemical) floats add sensors such as oxygen, chlorophyll, nitrate, pH and irradiance. Deep Argo floats profile below 4000 m, and those carrying an SBE61 CTD reach 6000 m. Deep is independent of the others, so a float can be both BGC and Deep. You can filter the array by any of these types."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is Argo float data free to download?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Argo data are freely available under CC BY 4.0 from the International Argo Program. This tool streams profiles live from the Argo GDAC and lets you export any parameter as CSV, a whole float as the original NetCDF, or every raw B-file level as a single CSV with QC flags for MATLAB, pandas or R. No account is needed."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is raw Argo B-file data?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Argo's synthetic profiles are quality-controlled and science-ready, but they omit the intermediate sensor signals. The per-cycle B-files keep those raw signals, such as raw fluorescence, backscatter counts and optode phase. This tool pulls B-files straight from the GDAC, one cycle or hundreds at a time, so you can inspect sensor behaviour and drift directly."
+      }
+    }
+  ]
 }
 </script>
 
@@ -139,17 +211,17 @@
 
 <div class="wrap">
   <div class="stats">
-    <div class="stat"><b>20,321</b><span>floats searchable</span></div>
-    <div class="stat"><b>2,895</b><span>BGC floats</span></div>
-    <div class="stat"><b>581</b><span>Deep Argo floats</span></div>
-    <div class="stat"><b>~350</b><span>SBE61 6000&nbsp;m</span></div>
+    <div class="stat"><b>20,345</b><span>floats searchable</span></div>
+    <div class="stat"><b>~4,300</b><span>active right now</span></div>
+    <div class="stat"><b>2,913</b><span>BGC floats</span></div>
+    <div class="stat"><b>587</b><span>Deep Argo floats</span></div>
   </div>
 
   <div class="preview">
     <img src="screenshot.png" width="1280" loading="lazy"
       alt="Argo Float Data Explorer showing the trajectory of Argo float 7901065 on an interactive basemap, showing the float's drift track across the Black Sea, with launch and latest positions marked.">
-    <p class="cap">A float's drift track on an interactive basemap, one of several
-      tabbed views (Overview, Trajectory, Profile &amp; Trend, T-S, Raw).</p>
+    <p class="cap">A float's drift track on an interactive basemap, one of six
+      tabbed views (Overview, Trajectory, Profile &amp; Trend, Overlay, T-S, Raw).</p>
   </div>
 </div>
 
@@ -162,8 +234,8 @@
     Argo program.</p>
   <div class="grid">
     <div class="feat"><div class="ic">🔎</div><h3>Search the whole array</h3>
-      <p>Find any of 20,321 floats by CTD/sensor <strong>serial number</strong>,
-        sensor model (e.g. SBE41, <strong>SBE61</strong>), WMO number, or ocean region.
+      <p>Find any float by CTD/sensor <strong>serial number</strong>,
+        sensor model (e.g. SBE41, <strong>SBE61</strong>), <strong>float type</strong> (Core, BGC, Deep), WMO number, or <strong>location</strong>.
         A serial search highlights exactly which sensor and serial it matched; click a
         match to open it.</p></div>
     <div class="feat"><div class="ic">🛟</div><h3>BGC, Core &amp; Deep Argo</h3>
@@ -171,13 +243,14 @@
         <strong>Deep&nbsp;Argo</strong> floats, including 6000&nbsp;m SBE61 Deep SOLO,
         Deep APEX, and Xuanwu profilers.</p></div>
     <div class="feat"><div class="ic">📈</div><h3>Rich, interactive plots</h3>
-      <p>An interactive trajectory basemap, vertical profiles (raw or adjusted,
-        QC-aware), depth-time sections, temperature-salinity diagrams, and
-        per-pressure time series with trend tests.</p></div>
+      <p>An interactive trajectory basemap, vertical profiles (real-time, QC-filtered
+        or adjusted), depth-time sections, temperature-salinity diagrams, up to four
+        measurands overlaid on one pressure axis, and per-pressure time series with
+        <strong>Sen's slope</strong> and <strong>Mann-Kendall</strong> trend tests.</p></div>
     <div class="feat"><div class="ic">🔬</div><h3>Raw per-cycle diagnostics</h3>
-      <p>Pull a single cycle's raw B-file straight from the GDAC and inspect the
+      <p>Pull one cycle or hundreds of raw B-files straight from the GDAC and inspect the
         intermediate sensor signals (raw fluorescence, backscatter, optode phase)
-        that never reach the synthetic product.</p></div>
+        that never reach the synthetic product, then export every level as one CSV.</p></div>
     <div class="feat"><div class="ic">🧪</div><h3>TEOS-10 derived quantities</h3>
       <p>Potential density σ₀, conservative temperature, mixed-layer depth, and
         apparent oxygen utilization, computed on the fly with <code>gsw</code>.</p></div>
@@ -188,6 +261,50 @@
       <p>MIT-licensed code, built on freely available Argo data. No login, no cost,
         for everyone.</p></div>
   </div>
+</section>
+
+<section class="wrap">
+  <h2>Find Argo floats near any location</h2>
+  <p class="lead">Enter a <strong>latitude and longitude</strong> and a radius, and the
+    tool lists every Argo float whose last known fix falls inside it, nearest first, with
+    the distance in kilometres. It draws them on a map you can click to open any float.
+    No other public Argo tool lets you go from a coordinate to a float's full sensor
+    dossier in one step.</p>
+  <p>Not sure where to look? <strong>21 region presets</strong> jump straight to
+    well-sampled water: the <strong>Labrador Sea</strong>, <strong>Gulf Stream</strong>,
+    <strong>Sargasso Sea</strong>, <strong>Station ALOHA</strong> off Hawaii, the
+    <strong>Kuroshio</strong>, <strong>Drake Passage</strong>, <strong>Kerguelen</strong>,
+    the <strong>Arabian Sea</strong>, the <strong>Bay of Bengal</strong>, the
+    <strong>western Mediterranean</strong> and more. Every preset was chosen from the live
+    index, so each one always has active floats in it.</p>
+</section>
+
+<section class="wrap">
+  <h2>A map of every active Argo float</h2>
+  <p class="lead">Tick <strong>Show every active float</strong> to map the whole live
+    array at once: roughly <strong>4,300 floats</strong> still reporting worldwide, out of
+    the ~20,300 ever deployed. Each dot is colored by type, so you can see at a glance
+    where the <strong>BGC</strong> floats cluster and where <strong>Deep Argo</strong>
+    is sampling.</p>
+  <p>A float counts as <strong>active</strong> if it has reported a profile in the last
+    <strong>60 days</strong>. Argo floats surface roughly every 10 days, so a longer gap
+    almost always means the float has stopped. Every float in the results carries an
+    <strong>active or inactive</strong> status and its <strong>last profile date</strong>,
+    which answers a question the raw GDAC index makes surprisingly hard: is this float
+    still alive?</p>
+</section>
+
+<section class="wrap">
+  <h2>Download the data</h2>
+  <p class="lead">Everything you can see, you can take away. Export any parameter as
+    <strong>CSV</strong>, a per-pressure time series as CSV, a float's complete profile
+    file as the original <strong>NetCDF</strong>, or every raw level you pulled as a
+    single CSV carrying every parameter the B-files report plus each one's
+    <strong>QC flag</strong>, ready to load straight into <strong>MATLAB</strong>,
+    <strong>pandas</strong> or <strong>R</strong>.</p>
+  <p>Prefer to query it yourself? A free, no-key <a href="./api.html">data API</a>
+    publishes the whole index as Parquet and JSON, so you can look up floats by sensor
+    serial number with DuckDB or pandas over plain HTTP.</p>
 </section>
 
 <section class="wrap">
