@@ -657,8 +657,8 @@ sensors, floats = load_tables(ROOT)
 mani = read_manifest(ROOT)
 
 st.title("🌊 Argo Float Data Explorer")
-st.caption("BGC, Core & Deep Argo float profiles.  Search the "
-           "whole array by sensor serial number, model or WMO.")
+st.caption("BGC, Core & Deep Argo float profiles.  Find floats near a location, map "
+           "the live array, or search by sensor serial number, model, type or WMO.")
 if sensors is None:
     st.error(
         f"No index found in `{ROOT}`.\n\n"
@@ -748,26 +748,22 @@ nprof_by_wmo = (dict(zip(floats["wmo"].astype(str), floats["n_profiles"]))
                 if "n_profiles" in floats.columns else {})
 
 st.sidebar.header("Find a float")
-serial_q = st.sidebar.text_input("Serial number contains",
-                                 help="Matches SENSOR_SERIAL_NO or FLOAT_SERIAL_NO "
-                                      "(case-insensitive substring).")
-models = ["(any)"] + sorted(sensors["sensor_model"].dropna().unique().tolist())
-model_q = st.sidebar.selectbox("Sensor model", models,
-                               help="e.g. SBE41, SBE41CP for the CTD.")
+# Browsing comes first: someone arriving cold has no serial number, so leading with
+# the serial box hands them the one control they cannot use. Serial lookup is the
+# power feature and lives below. Every control here is a FILTER and they combine
+# (AND), which the old "...or" labels claimed the opposite of.
+st.sidebar.markdown("**Browse the array**")
 _type_opts = sorted({t for t in type_by_wmo.values() if t and t != "-"})
 type_q = st.sidebar.selectbox(
     "Float type", ["(any)"] + _type_opts,
     help="Core = temperature/salinity. BGC = biogeochemical sensors on board. "
          "Deep = profiles below 4000 m (SBE61 floats reach 6000 m). Matches the "
          "type column in the results.")
-wmo_q = st.sidebar.text_input("…or WMO number", help="Jump straight to a float.")
-
-st.sidebar.markdown("**…or by location**")
 loc_on = st.sidebar.checkbox(
-    "Search near a position", value=False,
-    help="Find floats whose LAST KNOWN position is near a point. The index stores "
-         "each float's last fix, so this answers 'what was last seen here', not "
-         "'what has ever sampled here'.")
+    "Search near a position", value=True,
+    help="Find floats whose LAST KNOWN position is near a point, or map the whole "
+         "live array. The index stores each float's last fix, so this answers 'what "
+         "was last seen here', not 'what has ever sampled here'.")
 lat_q = lon_q = 0.0
 radius_q = 500
 active_only = True
@@ -817,6 +813,19 @@ if loc_on:
         # half the Earth's circumference: every float is within this of any point, so
         # the same distance filter serves the global view with no special case
         radius_q, active_only = 20100, True
+
+st.sidebar.markdown("**Look up a specific float**")
+serial_q = st.sidebar.text_input(
+    "Serial number contains", placeholder="e.g. 17106 or P41308-22EU002",
+    help="Matches SENSOR_SERIAL_NO or FLOAT_SERIAL_NO (case-insensitive substring). "
+         "Argo has no serial-to-float index, so this one is built from every float's "
+         "meta.nc.")
+models = ["(any)"] + sorted(sensors["sensor_model"].dropna().unique().tolist())
+model_q = st.sidebar.selectbox("Sensor model", models,
+                               help="e.g. SBE41, SBE41CP for the CTD.")
+wmo_q = st.sidebar.text_input("WMO number", placeholder="e.g. 6903132",
+                              help="Jump straight to a float.")
+st.sidebar.caption("These filters combine: a type plus a location narrows to both.")
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -1106,8 +1115,8 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or type_q != "(any)" 
         st.caption(f"Float {_open} was picked on the map, so it is pinned to the top; "
                    "the rest keep their order.")
 else:
-    st.info("Enter a serial number, sensor model, float type, WMO, or a "
-            "location in the sidebar.")
+    st.info("Pick a float type or tick **Search near a position** in the sidebar to "
+            "browse the array, or look up a specific float by serial number or WMO.")
     wmos = []
 
 if not wmos:
