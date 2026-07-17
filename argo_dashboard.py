@@ -698,6 +698,30 @@ model_q = st.sidebar.selectbox("Sensor model", models,
                                help="e.g. SBE41, SBE41CP for the CTD.")
 wmo_q = st.sidebar.text_input("…or WMO number", help="Jump straight to a float.")
 
+st.sidebar.markdown("**…or by location**")
+loc_on = st.sidebar.checkbox(
+    "Search near a position", value=False,
+    help="Find floats whose LAST KNOWN position is near a point. The index stores "
+         "each float's last fix, so this answers 'what was last seen here', not "
+         "'what has ever sampled here'.")
+lat_q = lon_q = 0.0
+radius_q = 500
+active_only = True
+if loc_on:
+    _lc1, _lc2 = st.sidebar.columns(2)
+    lat_q = _lc1.number_input("Latitude", min_value=-90.0, max_value=90.0,
+                              value=36.5, step=0.5, format="%.2f")
+    lon_q = _lc2.number_input("Longitude", min_value=-180.0, max_value=180.0,
+                              value=-25.0, step=0.5, format="%.2f")
+    radius_q = st.sidebar.slider("Within (km)", min_value=25, max_value=3000,
+                                 value=500, step=25,
+                                 help="Great-circle distance from the point above.")
+    active_only = st.sidebar.checkbox(
+        "Active floats only", value=True,
+        help=f"A float is active if it reported within {ACTIVE_DAYS} days. A last-known "
+             "position is only meaningful for a float still reporting; an inactive "
+             "float's last fix may be decades old. Untick for historical searches.")
+
 st.sidebar.markdown("---")
 st.sidebar.caption(
     f"🐛 [Report a bug / request a feature]({NEW_ISSUE_URL})")
@@ -706,6 +730,35 @@ st.sidebar.caption(
     "freely shared under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). "
     "[doi.org/10.17882/42182](https://doi.org/10.17882/42182). "
     "With thanks. See **Acknowledgements** up top.")
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Great-circle distance in km; lat2/lon2 may be arrays (vectorized)."""
+    R = 6371.0088
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dp, dl = p2 - p1, np.radians(lon2 - lon1)
+    a = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
+    return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
+def floats_near(lat, lon, km, active_only):
+    """WMOs whose last known fix is within km of (lat, lon) -> {wmo: distance_km}.
+    Pure index lookup: last_lat/last_lon are already in the crosswalk, so this
+    costs no GDAC fetch."""
+    if not {"last_lat", "last_lon"}.issubset(floats.columns):
+        return {}
+    f = floats[["wmo", "last_lat", "last_lon", "last_date"]].dropna(
+        subset=["last_lat", "last_lon"])
+    d = haversine_km(lat, lon, f["last_lat"].to_numpy("float64"),
+                     f["last_lon"].to_numpy("float64"))
+    f = f.assign(_km=d)
+    f = f[f["_km"] <= km]
+    if active_only:
+        _age = (pd.Timestamp.now().normalize()
+                - pd.to_datetime(f["last_date"].map(parse_argo_date),
+                                 errors="coerce")).dt.days
+        f = f[_age.le(ACTIVE_DAYS).fillna(False)]
+    return dict(zip(f["wmo"].astype(str), f["_km"]))
+
 
 # resolve search -> candidate floats
 def search():
@@ -719,8 +772,11 @@ def search():
         df = df[m]
     if wmo_q.strip():
         df = df[df["wmo"].astype(str).str.contains(wmo_q.strip())]
+    if loc_on:
+        df = df[df["wmo"].astype(str).isin(near_km)]
     return df
 
+near_km = floats_near(lat_q, lon_q, radius_q, active_only) if loc_on else {}
 hits = search()
 
 st.subheader("Matches")
@@ -738,7 +794,7 @@ if {"data_kind", "is_deep"}.issubset(floats.columns):
 last_raw_by_wmo = (dict(zip(floats["wmo"].astype(str), floats["last_date"]))
                    if "last_date" in floats.columns else {})
 
-if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
+if serial_q.strip() or wmo_q.strip() or model_q != "(any)" or loc_on:
     n_floats = int(hits["wmo"].nunique())
     st.markdown(f"**{n_floats:,} float{'s' if n_floats != 1 else ''} found**")
     # When searching by serial, label what triggered each match (the sensor and its
@@ -774,8 +830,41 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
                                       np.where(_age <= ACTIVE_DAYS,
                                                "active", "inactive")))
     show.insert(3, "last profile", _lp)
+    if loc_on:
+        # distance from the searched point; nearest first
+        show.insert(4, "km away", show["wmo"].astype(str).map(near_km).round(0))
+        show = show.sort_values("km away").reset_index(drop=True)
     if serial_hit:
-        show.insert(4, "matched_on", show.pop("matched_on"))   # prominent, near the front
+        show.insert(5 if loc_on else 4, "matched_on", show.pop("matched_on"))
+    # A spatial search deserves a spatial answer: plot the hits' last fixes with the
+    # search point, so the result reads as a map, not just a list.
+    if loc_on and len(show):
+        _mp = show[["wmo", "km away"]].copy()
+        _mp["lat"] = _mp["wmo"].astype(str).map(
+            dict(zip(floats["wmo"].astype(str), floats["last_lat"])))
+        _mp["lon"] = _mp["wmo"].astype(str).map(
+            dict(zip(floats["wmo"].astype(str), floats["last_lon"])))
+        _mp = _mp.dropna(subset=["lat", "lon"])
+        if len(_mp):
+            _pt = pd.DataFrame({"lat": [lat_q], "lon": [lon_q]})
+            st.pydeck_chart(pdk.Deck(
+                map_style=None,
+                initial_view_state=pdk.ViewState(
+                    latitude=float(lat_q), longitude=float(lon_q),
+                    zoom=next((z for thr, z in [(150, 6), (400, 5), (900, 4),
+                                                (2000, 3)] if radius_q < thr), 2)),
+                layers=[
+                    pdk.Layer("ScatterplotLayer", data=_mp,
+                              get_position="[lon, lat]",
+                              get_fill_color=[10, 110, 189, 160], get_radius=18000,
+                              radius_min_pixels=3, pickable=True),
+                    pdk.Layer("ScatterplotLayer", data=_pt, get_position="[lon, lat]",
+                              get_fill_color=[214, 40, 40], get_radius=26000,
+                              radius_min_pixels=7, pickable=False)],
+                tooltip={"text": "float {wmo}\n{km away} km away"}), height=340)
+            st.caption(f"🔴 your search point ({lat_q:.2f}, {lon_q:.2f}) · 🔵 each "
+                       f"float's last known fix within {radius_q:,} km. Floats drift, "
+                       "so a fix is where it was last heard from, not where it is now.")
     cap = "Select a row's checkbox (far left) to open that float ↓"
     if serial_hit:
         cap += "  ·  the highlighted **matched on** column shows what your serial hit"
@@ -790,6 +879,10 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
         "last profile": st.column_config.DatetimeColumn(
             "last profile", format="YYYY-MM-DD",
             help="Date of the most recent profile this float reported."),
+        "km away": st.column_config.NumberColumn(
+            "km away", format="%.0f km",
+            help="Great-circle distance from your search point to this float's last "
+                 "known fix. The float has drifted since, so treat it as approximate."),
     }
     if serial_hit:
         _cfg["matched_on"] = st.column_config.TextColumn(
@@ -818,7 +911,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
     # Clicking a table row opens that float by pre-filling the picker below.
     # Forget the remembered click whenever the result set changes, and act only
     # on a *new* row so the dropdown can still override a row selection.
-    sig = (serial_q, wmo_q, model_q)
+    sig = (serial_q, wmo_q, model_q, loc_on, lat_q, lon_q, radius_q, active_only)
     if st.session_state.get("_match_sig") != sig:
         st.session_state["_match_sig"] = sig
         st.session_state.pop("_last_row", None)
