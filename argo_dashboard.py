@@ -788,11 +788,12 @@ active_only = st.sidebar.checkbox(
 # really one either/or question wearing two hats.
 st.sidebar.markdown("**Where**")
 where = st.sidebar.radio(
-    "Where", ["Near a position", "Anywhere"], index=0, label_visibility="collapsed",
-    help="Near a position finds floats whose LAST KNOWN fix is inside a radius. "
-         "Anywhere drops the radius and maps them worldwide. The index stores each "
-         "float's last fix, so either way this is 'what was last seen here', not "
-         "'what has ever sampled here'.")
+    "Where", ["Anywhere", "Near a position"], index=0, label_visibility="collapsed",
+    help="Anywhere maps every float matching your filters, worldwide: the whole live "
+         "array by default. Near a position narrows to floats whose LAST KNOWN fix is "
+         "inside a radius of a point. The index stores each float's last fix, so "
+         "either way this is 'what was last seen here', not 'what has ever sampled "
+         "here'.")
 near_mode = where == "Near a position"
 lat_q, lon_q, radius_q = 39.0, 5.0, 500
 if near_mode:
