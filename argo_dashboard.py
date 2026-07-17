@@ -59,6 +59,36 @@ GOOD_QC = {1, 2, 5, 8}
 # floats the Argo Program reports as the live array.
 ACTIVE_DAYS = 60
 
+# Preset spots for the location search: (lat, lon, radius_km), grouped by ocean.
+# Chosen from the index rather than by hand: every one of these currently holds at
+# least 8 active floats, so a new user exploring never lands on empty water. Some
+# obvious-sounding regions are deliberately absent (the Red and Barents Seas have
+# no active floats at all; the Black, Weddell and Ross Seas only a handful).
+REGIONS = {
+    "Mediterranean (western)": (39.0, 5.0, 500),
+    "N Atlantic: Labrador Sea": (57.0, -52.0, 500),
+    "N Atlantic: Irminger Sea": (60.0, -38.0, 500),
+    "N Atlantic: Norwegian Sea": (67.0, 3.0, 500),
+    "N Atlantic: Gulf Stream": (38.0, -70.0, 500),
+    "N Atlantic: Sargasso Sea": (32.0, -64.0, 600),
+    "N Atlantic: Azores": (36.5, -25.0, 500),
+    "S Atlantic: Brazil-Malvinas": (-40.0, -50.0, 600),
+    "S Atlantic: Benguela": (-30.0, 5.0, 600),
+    "Pacific: subpolar N": (50.0, -145.0, 700),
+    "Pacific: Gulf of Alaska": (55.0, -145.0, 600),
+    "Pacific: California Current": (35.0, -125.0, 600),
+    "Pacific: Station ALOHA": (22.75, -158.0, 600),
+    "Pacific: equatorial": (0.0, -140.0, 800),
+    "Pacific: Kuroshio": (35.0, 145.0, 600),
+    "Pacific: Tasman Sea": (-40.0, 160.0, 600),
+    "Indian: Arabian Sea": (15.0, 65.0, 600),
+    "Indian: Bay of Bengal": (15.0, 88.0, 500),
+    "Indian: Kerguelen": (-48.0, 70.0, 700),
+    "Indian: Agulhas": (-35.0, 25.0, 600),
+    "Southern Ocean: Drake Passage": (-58.0, -63.0, 700),
+}
+REGION_DEFAULT = "Mediterranean (western)"
+
 # ---- contact / feedback ------------------------------------------------------
 # Set ARGO_ISSUES_URL at deploy time (or edit the default) once the repo exists.
 # e.g. export ARGO_ISSUES_URL="https://github.com/<owner>/<repo>/issues"
@@ -728,15 +758,30 @@ lat_q = lon_q = 0.0
 radius_q = 500
 active_only = True
 if loc_on:
+    _region = st.sidebar.selectbox(
+        "Jump to a region", ["(custom)"] + list(REGIONS),
+        index=1 + list(REGIONS).index(REGION_DEFAULT),
+        help="Well-sampled spots to explore. Picking one fills in the coordinates "
+             "and radius below, which you can then adjust.")
+    # Apply a region BEFORE the coordinate widgets are created: Streamlit only lets
+    # you seed a widget's session_state ahead of instantiating it.
+    if _region != "(custom)" and _region != st.session_state.get("_last_region"):
+        st.session_state["_last_region"] = _region
+        _rla, _rlo, _rr = REGIONS[_region]
+        st.session_state["lat_q"] = _rla
+        st.session_state["lon_q"] = _rlo
+        st.session_state["radius_q"] = _rr
+    _rd = REGIONS[REGION_DEFAULT]
+    st.session_state.setdefault("lat_q", _rd[0])
+    st.session_state.setdefault("lon_q", _rd[1])
+    st.session_state.setdefault("radius_q", _rd[2])
     _lc1, _lc2 = st.sidebar.columns(2)
-    # defaults to the western Mediterranean: a dense, well-sampled spot that returns
-    # BGC, Core and Deep floats, so the first search a visitor runs is not empty
     lat_q = _lc1.number_input("Latitude", min_value=-90.0, max_value=90.0,
-                              value=39.0, step=0.5, format="%.2f")
+                              step=0.5, format="%.2f", key="lat_q")
     lon_q = _lc2.number_input("Longitude", min_value=-180.0, max_value=180.0,
-                              value=5.0, step=0.5, format="%.2f")
+                              step=0.5, format="%.2f", key="lon_q")
     radius_q = st.sidebar.slider("Within (km)", min_value=25, max_value=3000,
-                                 value=500, step=25,
+                                 step=25, key="radius_q",
                                  help="Great-circle distance from the point above.")
     active_only = st.sidebar.checkbox(
         "Active floats only", value=True,
