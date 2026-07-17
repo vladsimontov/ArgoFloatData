@@ -928,12 +928,12 @@ def _stat_profile(sub, nbins=140):
     return cen, mean.to_numpy(), std.to_numpy()
 
 
-def _overlay_fig(profiles, show_band=True):
-    """Multi-x-axis overlay: a shared reversed pressure y-axis, one color-matched
-    x-axis per measurand (first on the bottom, the rest stacked on top). Each entry
-    is (name, pres, mean, std, units); with show_band a shaded +/- 1 std ribbon is
-    drawn behind each mean line."""
-    ntop = len(profiles) - 1
+def _stacked_layout(items):
+    """Shared layout for the pressure-vs-measurand plots: a reversed pressure
+    y-axis with one color-matched x-axis per measurand, the first on the bottom
+    and the rest stacked on top. items is [(name, units)]. Returns (layout, xaxis
+    refs). Used by both the mean overlay and the individual-casts view."""
+    ntop = len(items) - 1
     # Each stacked top axis needs a fixed vertical band for its title + tick
     # labels. Grow the figure by a band per top axis (rather than cramming them
     # into a fixed height) so titles never smear into the neighbouring ticks.
@@ -941,14 +941,64 @@ def _overlay_fig(profiles, show_band=True):
     height = plot_px + (band_px * ntop + head_px if ntop else 0)
     step = band_px / height if ntop else 0.0
     ytop = plot_px / height if ntop else 1.0
-    fig = go.Figure()
     layout = {"height": height, "margin": dict(l=64, r=24, t=10, b=46),
               "showlegend": False,
               "yaxis": dict(title="PRES [decibar]", autorange="reversed",
                             domain=[0.0, ytop])}
+    xas = []
+    for i, (name, units) in enumerate(items):
+        color = _OVL_COLORS[i % len(_OVL_COLORS)]
+        xas.append("x" if i == 0 else f"x{i + 1}")
+        title = f"{name} [{units}]" if units else name
+        ax = dict(title=dict(text=title, font=dict(color=color, size=14)),
+                  tickfont=dict(color=color, size=12), showgrid=(i == 0),
+                  zeroline=False)
+        if i == 0:
+            ax["side"] = "bottom"
+            layout["xaxis"] = ax
+        else:
+            ax.update(overlaying="x", side="top", anchor="free",
+                      position=min(1.0, ytop + step * (i - 1) + step * 0.18))
+            layout[f"xaxis{i + 1}"] = ax
+    return layout, xas
+
+
+def _casts_fig(series, units_map):
+    """Every cast drawn discretely, never averaged, on the shared stacked
+    pressure/x-axis layout. series is [(name, [(cycle, pres, val, date)])]. With a
+    single measurand each cast is colored by date (the drift view); with several,
+    casts take their measurand's color at low opacity so each axis stays legible."""
+    layout, xas = _stacked_layout([(nm, units_map.get(nm)) for nm, _ in series])
+    fig = go.Figure()
+    single = len(series) == 1
+    for i, (nm, casts) in enumerate(series):
+        base = _OVL_COLORS[i % len(_OVL_COLORS)]
+        cols = (px.colors.sample_colorscale(
+            "Viridis", [j / max(1, len(casts) - 1) for j in range(len(casts))])
+            if single and len(casts) > 1 else None)
+        for j, (cyc, pres, val, dt) in enumerate(casts):
+            fig.add_trace(go.Scattergl(
+                x=val, y=pres, mode="lines",
+                line=dict(color=cols[j] if cols else _rgba(base, 0.45), width=1.3),
+                xaxis=xas[i], yaxis="y", showlegend=False,
+                hovertemplate=(f"cycle {cyc}"
+                               + (f" · {dt:%Y-%m-%d}" if pd.notna(dt) else "")
+                               + f"<br>{nm}=%{{x:.4g}}"
+                               "<br>PRES=%{y:.1f} dbar<extra></extra>")))
+    fig.update_layout(**layout)
+    return fig
+
+
+def _overlay_fig(profiles, show_band=True):
+    """Multi-x-axis overlay: a shared reversed pressure y-axis, one color-matched
+    x-axis per measurand (first on the bottom, the rest stacked on top). Each entry
+    is (name, pres, mean, std, units); with show_band a shaded +/- 1 std ribbon is
+    drawn behind each mean line."""
+    layout, xas = _stacked_layout([(nm, u) for nm, _, _, _, u in profiles])
+    fig = go.Figure()
     for i, (name, pres, mean, std, units) in enumerate(profiles):
         color = _OVL_COLORS[i % len(_OVL_COLORS)]
-        xa = "x" if i == 0 else f"x{i + 1}"
+        xa = xas[i]
         if show_band and np.any(std > 0):
             fig.add_trace(go.Scatter(
                 x=np.concatenate([mean + std, (mean - std)[::-1]]),
@@ -960,16 +1010,6 @@ def _overlay_fig(profiles, show_band=True):
             xaxis=xa, yaxis="y", customdata=std,
             hovertemplate=f"{name}=%{{x:.4g}} ± %{{customdata:.3g}}"
                           "<br>PRES=%{y:.0f} dbar<extra></extra>"))
-        title = f"{name} [{units}]" if units else name
-        ax = dict(title=dict(text=title, font=dict(color=color, size=14)),
-                  tickfont=dict(color=color, size=12), showgrid=(i == 0), zeroline=False)
-        if i == 0:
-            ax["side"] = "bottom"
-            layout["xaxis"] = ax
-        else:
-            ax.update(overlaying="x", side="top", anchor="free",
-                      position=min(1.0, ytop + step * (i - 1) + step * 0.18))
-            layout[f"xaxis{i + 1}"] = ax
     fig.update_layout(**layout)
     return fig
 
@@ -996,7 +1036,9 @@ def fetch_raw_many(dac, wmo, cycles, is_bgc, progress=None):
 
 def raw_cycle_frame(path, cycle):
     """One cycle's raw file -> a wide tidy frame: cycle/time/lat/lon/pres + every
-    numeric measurand on the PRES grid (intermediate sensor signals included)."""
+    numeric measurand on the PRES grid (intermediate sensor signals included) plus
+    each parameter's decoded QC flag, so a CSV export carries everything the file
+    holds for offline work."""
     rds = load_raw(path)
     if "PRES" not in rds:
         return None, {}
@@ -1007,8 +1049,18 @@ def raw_cycle_frame(path, cycle):
     dims = rds["PRES"].dims
     cols, units = {"pres": P.ravel()}, {}
     for v in rds.data_vars:
-        if (v != "PRES" and rds[v].dims == dims
-                and np.issubdtype(rds[v].dtype, np.number) and not v.endswith("_QC")):
+        if v == "PRES" or rds[v].dims != dims:
+            continue
+        if v.endswith("_QC"):
+            # flags arrive as bytes (b'1'); decode so they survive to CSV, and blank
+            # the missing ones so importers see an empty cell, not the text "nan"
+            a = np.asarray(rds[v].values)
+            if a.ndim == 1:
+                a = a.reshape(1, -1)
+            if a.shape == (nprof, nlev):
+                f = np.array([_flag_str(x) for x in a.ravel()], dtype=object)
+                cols[v] = np.where(np.isin(f, ("", " ", "nan", "None", "--")), "", f)
+        elif np.issubdtype(rds[v].dtype, np.number):
             a = np.asarray(rds[v].values, dtype="float64")
             if a.ndim == 1:
                 a = a.reshape(1, -1)
@@ -1625,7 +1677,8 @@ with tab_raw:
                 _units = st.session_state.get("raw_units", {})
                 _pulled = sorted(raw_df["cycle"].unique().tolist())
                 raw_params = [c for c in raw_df.columns
-                              if c not in ("cycle", "pres", "time", "lat", "lon")]
+                              if c not in ("cycle", "pres", "time", "lat", "lon")
+                              and not c.endswith("_QC")]
                 if not raw_params:
                     st.info("These raw files report no plottable measurands.")
                 else:
@@ -1637,49 +1690,46 @@ with tab_raw:
                         help="Every parameter in the raw files, including intermediate "
                              "sensor signals. Each gets its own color-matched x-axis "
                              "over the shared pressure axis.")
-                    _auto = "Individual casts" if len(rmeas) == 1 else "Mean ± 1σ"
+                    # keyed, so the choice sticks: a keyless radio's identity comes
+                    # from its params, so a changing index would silently reset it
+                    # when the measurand count changed.
                     mode = mc2.radio(
-                        "Show", ["Individual casts", "Mean ± 1σ"],
-                        index=0 if _auto == "Individual casts" else 1,
-                        help="Individual casts colors every profile by date, best for "
-                             "spotting drift or an odd cast. Mean ± 1σ averages across "
-                             "the pulled profiles, best for comparing measurands.")
+                        "Show", ["Individual casts", "Mean ± 1σ"], key="raw_mode",
+                        help="Individual casts draws every profile separately (colored "
+                             "by date for a single measurand), best for spotting drift "
+                             "or an odd cast. Mean ± 1σ averages across the pulled "
+                             "profiles, best for comparing measurands.")
                     st.caption(f"{len(_pulled)} profile(s) pulled · cycles "
                                f"{_pulled[0]} to {_pulled[-1]} · {len(raw_df):,} levels.")
                     if not rmeas:
                         st.info("Pick a measurand to plot.")
-                    elif mode == "Individual casts" and len(rmeas) == 1:
-                        m0 = rmeas[0]
-                        figr = go.Figure()
-                        _cyc_list = _pulled
-                        _cols = (px.colors.sample_colorscale(
-                            "Viridis", [i / max(1, len(_cyc_list) - 1)
-                                        for i in range(len(_cyc_list))])
-                            if len(_cyc_list) > 1 else ["#0b7285"])
-                        for _i, _c in enumerate(_cyc_list):
-                            _s = raw_df[raw_df["cycle"] == _c]
-                            _mk = np.isfinite(_s["pres"]) & np.isfinite(_s[m0])
-                            if not _mk.any():
-                                continue
-                            _d = (pd.to_datetime(_s["time"].iloc[0], errors="coerce")
-                                  if "time" in _s else pd.NaT)
-                            figr.add_trace(go.Scattergl(
-                                x=_s.loc[_mk, m0], y=_s.loc[_mk, "pres"],
-                                mode="lines", line=dict(color=_cols[_i], width=1.4),
-                                name=f"cycle {_c}", showlegend=False,
-                                hovertemplate=(f"cycle {_c}"
-                                               + (f" · {_d:%Y-%m-%d}"
-                                                  if pd.notna(_d) else "")
-                                               + f"<br>{m0}=%{{x:.4g}}"
-                                               "<br>PRES=%{y:.1f} dbar<extra></extra>")))
-                        _u0 = _units.get(m0)
-                        figr.update_xaxes(title=f"{m0} [{_u0}]" if _u0 else m0)
-                        figr.update_yaxes(autorange="reversed", title="PRES [decibar]")
-                        figr.update_layout(height=600)
-                        _titled(figr, f"{float_tag} · raw {m0} · {len(_cyc_list)} cast(s)")
-                        st.plotly_chart(figr, width="stretch")
-                        if len(_cyc_list) > 1:
-                            st.caption("Dark to light = oldest to newest cycle.")
+                    elif mode == "Individual casts":
+                        series = []
+                        for m in rmeas:
+                            casts = []
+                            for _c in _pulled:
+                                _s = raw_df[raw_df["cycle"] == _c]
+                                _mk = (np.isfinite(_s["pres"].to_numpy())
+                                       & np.isfinite(_s[m].to_numpy()))
+                                if not _mk.any():
+                                    continue
+                                _d = (pd.to_datetime(_s["time"].iloc[0], errors="coerce")
+                                      if "time" in _s else pd.NaT)
+                                casts.append((_c, _s.loc[_mk, "pres"].to_numpy(),
+                                              _s.loc[_mk, m].to_numpy(), _d))
+                            if casts:
+                                series.append((m, casts))
+                        if not series:
+                            st.warning("No finite samples for these measurands.")
+                        else:
+                            _ncast = max(len(c) for _, c in series)
+                            st.plotly_chart(_casts_fig(series, _units), width="stretch")
+                            st.caption(
+                                f"Every cast drawn separately, no averaging · "
+                                f"{_ncast} cast(s) per measurand · "
+                                + ("dark to light = oldest to newest cycle."
+                                   if len(series) == 1
+                                   else "colored by measurand, each on its own x-axis."))
                     else:
                         profiles = []
                         for m in rmeas:
@@ -1699,19 +1749,26 @@ with tab_raw:
                                 + (", shaded to ±1 standard deviation"
                                    if len(_pulled) > 1 else "")
                                 + "; each measurand keeps its own color and x-axis.")
-                    _csv_cols = (["cycle", "time", "lat", "lon", "pres"]
-                                 + [c for c in (rmeas or raw_params)])
-                    _csv_cols = [c for c in _csv_cols if c in raw_df.columns]
-                    _out = raw_df[_csv_cols].copy()
+                    # everything pulled, not just what's plotted: every parameter in
+                    # the raw files plus their QC flags, for offline work
+                    _meta_cols = [c for c in ("cycle", "time", "lat", "lon", "pres")
+                                  if c in raw_df.columns]
+                    _data_cols = [c for c in raw_df.columns if c not in _meta_cols]
+                    _out = raw_df[_meta_cols + _data_cols].copy()
                     _out.insert(0, "wmo", sel_wmo)
                     st.download_button(
                         f"Download all {len(_pulled)} raw profile(s) as one CSV "
-                        f"({len(_out):,} rows)",
+                        f"({len(_out):,} rows × {len(_out.columns)} cols)",
                         _out.to_csv(index=False).encode(),
                         file_name=f"{sel_wmo}_raw_{_pulled[0]}-{_pulled[-1]}.csv",
                         mime="text/csv", key="raw_csv_all",
-                        help="One row per level per cycle, with the selected measurands "
-                             "plus cycle, time and position.")
+                        help="Everything pulled, not just what's plotted: one row per "
+                             "level per cycle, with every parameter the raw files "
+                             "report and its QC flag, plus cycle, time and position. "
+                             "Ready to load straight into MATLAB, pandas or R.")
+                    st.caption(
+                        f"CSV carries all {len(raw_params)} measurand(s) the raw files "
+                        "report, plus their QC flags, not only the ones plotted above.")
 
 # ===================== Overlay: multi-measurand profile over a cycle range =====================
 with tab_overlay:
