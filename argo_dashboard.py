@@ -2004,8 +2004,11 @@ with tab_raw:
                 _set_pick(_cyc_vals); st.rerun()
             if st.button("None", help="Clear the selection."):
                 _set_pick([]); st.rerun()
+            # a young float can have fewer cycles than the default stride, and a
+            # value above max_value raises before the widget ever draws
+            _nth_max = max(1, len(_cyc_vals))
             _nth = st.number_input("Every Nth cycle", min_value=1,
-                                   max_value=max(1, len(_cyc_vals)), value=10, step=1,
+                                   max_value=_nth_max, value=min(10, _nth_max), step=1,
                                    width=150,
                                    help="Sample the whole record without pulling every "
                                         "cycle. Press Apply to tick those boxes.")
