@@ -760,8 +760,10 @@ q = st.sidebar.text_input(
          "has no serial-to-float index, so this one is built from every float's "
          "meta.nc.")
 
+# WHAT you keep. Every one of these is a property of the float itself, so they all
+# belong together and all apply the same way.
 st.sidebar.markdown("**Filters**")
-st.sidebar.caption("Narrow the results. They combine.")
+st.sidebar.caption("Narrow what you browse. They combine.")
 _type_opts = sorted({t for t in type_by_wmo.values() if t and t != "-"})
 type_q = st.sidebar.selectbox(
     "Float type", ["(any)"] + _type_opts,
@@ -771,34 +773,37 @@ type_q = st.sidebar.selectbox(
 models = ["(any)"] + sorted(sensors["sensor_model"].dropna().unique().tolist())
 model_q = st.sidebar.selectbox("Sensor model", models,
                                help="e.g. SBE41, SBE41CP for the CTD.")
-loc_on = st.sidebar.checkbox(
-    "Search near a position", value=True,
-    help="Find floats whose LAST KNOWN position is near a point, or map the whole "
-         "live array. The index stores each float's last fix, so this answers 'what "
-         "was last seen here', not 'what has ever sampled here'.")
-lat_q = lon_q = 0.0
-radius_q = 500
-active_only = True
-show_all = False
-if loc_on:
-    # First, because it overrides everything below it, which then greys out.
-    show_all = st.sidebar.checkbox(
-        "Show every active float", value=False,
-        help=f"Ignore the point and radius and map the whole live array: every float "
-             f"that reported within {ACTIVE_DAYS} days, worldwide (~4,300). Inactive "
-             "floats are never included here.")
+# Was buried inside the location block, so you could not filter to active floats
+# unless you were also searching by position. It is a float property, not a
+# location setting, so it lives here with the others.
+active_only = st.sidebar.checkbox(
+    "Active floats only", value=True,
+    help=f"A float is active if it reported within {ACTIVE_DAYS} days. Argo floats "
+         "surface about every 10 days, so a longer gap almost always means it has "
+         "stopped. Untick for historical work. Ignored when you look up a float by "
+         "WMO or serial, so a dead float is never hidden from a direct search.")
+
+# WHERE you look. A scope, not a filter, which is why it is its own section: the two
+# competing checkboxes ("search near a position" / "show every active float") were
+# really one either/or question wearing two hats.
+st.sidebar.markdown("**Where**")
+where = st.sidebar.radio(
+    "Where", ["Near a position", "Anywhere"], index=0, label_visibility="collapsed",
+    help="Near a position finds floats whose LAST KNOWN fix is inside a radius. "
+         "Anywhere drops the radius and maps them worldwide. The index stores each "
+         "float's last fix, so either way this is 'what was last seen here', not "
+         "'what has ever sampled here'.")
+near_mode = where == "Near a position"
+lat_q, lon_q, radius_q = 39.0, 5.0, 500
+if near_mode:
     _region = st.sidebar.selectbox(
-        "Jump to a region",
-        ["N/A · showing every active float"] if show_all
-        else ["(custom)"] + list(REGIONS),
-        index=0 if show_all else 1 + list(REGIONS).index(REGION_DEFAULT),
-        disabled=show_all,
+        "Jump to a region", ["(custom)"] + list(REGIONS),
+        index=1 + list(REGIONS).index(REGION_DEFAULT),
         help="Well-sampled spots to explore. Picking one fills in the coordinates "
              "and radius below, which you can then adjust.")
     # Apply a region BEFORE the coordinate widgets are created: Streamlit only lets
     # you seed a widget's session_state ahead of instantiating it.
-    if (not show_all and _region != "(custom)"
-            and _region != st.session_state.get("_last_region")):
+    if _region != "(custom)" and _region != st.session_state.get("_last_region"):
         st.session_state["_last_region"] = _region
         _rla, _rlo, _rr = REGIONS[_region]
         st.session_state["lat_q"] = _rla
@@ -810,21 +815,12 @@ if loc_on:
     st.session_state.setdefault("radius_q", _rd[2])
     _lc1, _lc2 = st.sidebar.columns(2)
     lat_q = _lc1.number_input("Latitude", min_value=-90.0, max_value=90.0,
-                              step=0.5, format="%.2f", key="lat_q", disabled=show_all)
+                              step=0.5, format="%.2f", key="lat_q")
     lon_q = _lc2.number_input("Longitude", min_value=-180.0, max_value=180.0,
-                              step=0.5, format="%.2f", key="lon_q", disabled=show_all)
+                              step=0.5, format="%.2f", key="lon_q")
     radius_q = st.sidebar.slider("Within (km)", min_value=25, max_value=3000,
-                                 step=25, key="radius_q", disabled=show_all,
+                                 step=25, key="radius_q",
                                  help="Great-circle distance from the point above.")
-    active_only = st.sidebar.checkbox(
-        "Active floats only", value=True, disabled=show_all,
-        help=f"A float is active if it reported within {ACTIVE_DAYS} days. A last-known "
-             "position is only meaningful for a float still reporting; an inactive "
-             "float's last fix may be decades old. Untick for historical searches.")
-    if show_all:
-        # half the Earth's circumference: every float is within this of any point, so
-        # the same distance filter serves the global view with no special case
-        radius_q, active_only = 20100, True
 
 
 st.sidebar.markdown("---")
@@ -858,10 +854,10 @@ def active_wmo_set(root, days):
     return set(fl.loc[age.le(days).fillna(False), "wmo"].astype(str))
 
 
-def floats_near(lat, lon, km, active_only):
+def floats_near(lat, lon, km):
     """WMOs whose last known fix is within km of (lat, lon) -> {wmo: distance_km}.
-    Pure index lookup: last_lat/last_lon are already in the crosswalk, so this
-    costs no GDAC fetch."""
+    Pure index lookup: last_lat/last_lon are already in the crosswalk, so this costs
+    no GDAC fetch. Active filtering lives in search(), not here."""
     if not {"last_lat", "last_lon"}.issubset(floats.columns):
         return {}
     f = floats[["wmo", "last_lat", "last_lon", "last_date"]].dropna(
@@ -870,13 +866,6 @@ def floats_near(lat, lon, km, active_only):
                      f["last_lon"].to_numpy("float64"))
     f = f.assign(_km=d)
     f = f[f["_km"] <= km]
-    if active_only and len(f) > 500:      # whole-globe style query: use the cached set
-        f = f[f["wmo"].astype(str).isin(active_wmo_set(ROOT, ACTIVE_DAYS))]
-    elif active_only:
-        _age = (pd.Timestamp.now().normalize()
-                - pd.to_datetime(f["last_date"].map(parse_argo_date),
-                                 errors="coerce")).dt.days
-        f = f[_age.le(ACTIVE_DAYS).fillna(False)]
     return dict(zip(f["wmo"].astype(str), f["_km"]))
 
 
@@ -896,19 +885,22 @@ def search():
         df = df[m]
     if type_q != "(any)":
         df = df[df["wmo"].astype(str).map(type_by_wmo).eq(type_q)]
-    if loc_on and not q.strip():
-        # A typed WMO/serial is a jump to a named float, so a location filter the user
-        # never opted into must not hide it. Without this, searching a serial for a
-        # float outside the default region silently returned nothing.
-        df = df[df["wmo"].astype(str).isin(near_km)]
+    if not q.strip():
+        # Browse filters. Skipped for a lookup: both default to ON, so leaving them in
+        # would silently hide a named float (16,038 of 20,345 floats are inactive, and
+        # a serial's float is rarely near the default point).
+        if active_only:
+            df = df[df["wmo"].astype(str).isin(active_wmo_set(ROOT, ACTIVE_DAYS))]
+        if near_mode:
+            df = df[df["wmo"].astype(str).isin(near_km)]
     return df
 
-near_km = floats_near(lat_q, lon_q, radius_q, active_only) if loc_on else {}
+near_km = floats_near(lat_q, lon_q, radius_q) if near_mode else {}
 hits = search()
 
 st.subheader("Matches")
 
-if q.strip() or model_q != "(any)" or type_q != "(any)" or loc_on:
+if True:   # there is always something to show: a lookup, or the browse view
     n_floats = int(hits["wmo"].nunique())
     st.markdown(f"**{n_floats:,} float{'s' if n_floats != 1 else ''} found**")
     if n_floats == 0 and q.strip():
@@ -965,22 +957,24 @@ if q.strip() or model_q != "(any)" or type_q != "(any)" or loc_on:
     show.insert(4, "profiles",
                 pd.to_numeric(show["wmo"].astype(str).map(nprof_by_wmo),
                               errors="coerce").astype("Int64"))
-    browsing = loc_on and not q.strip()
-    if browsing:
-        # distance from the searched point; nearest first
+    browsing = not q.strip()
+    if browsing and near_mode:
+        # distance from the searched point; nearest first. Meaningless with no point,
+        # so "Anywhere" gets no km away column rather than a distance from nowhere.
         show.insert(5, "km away", show["wmo"].astype(str).map(near_km).round(0))
         show = show.sort_values("km away").reset_index(drop=True)
-    elif loc_on and q.strip():
+    elif q.strip():
         st.caption(f"Looking up “{q.strip()}” across the whole array. The location "
                    "filter is ignored for a direct lookup, so a float is never hidden "
                    "just because it is not near your search point.")
     if serial_hit:
-        show.insert(6 if browsing else 5, "matched_on", show.pop("matched_on"))
+        show.insert(6 if (browsing and near_mode) else 5, "matched_on",
+                    show.pop("matched_on"))
     # A spatial search deserves a spatial answer: plot the hits' last fixes with the
     # search point, so the result reads as a map, not just a list.
     _map_wmo = None
     if browsing and len(show):
-        _mp = show[["wmo", "type", "km away"]].copy()
+        _mp = show[["wmo", "type"] + (["km away"] if near_mode else [])].copy()
         _mp["lat"] = _mp["wmo"].astype(str).map(
             dict(zip(floats["wmo"].astype(str), floats["last_lat"])))
         _mp["lon"] = _mp["wmo"].astype(str).map(
@@ -994,21 +988,22 @@ if q.strip() or model_q != "(any)" or type_q != "(any)" or loc_on:
             _mev = st.pydeck_chart(pdk.Deck(
                 map_style=None,
                 initial_view_state=pdk.ViewState(
-                    latitude=float(lat_q), longitude=float(lon_q),
-                    zoom=(1 if show_all else
-                          next((z for thr, z in [(150, 6), (400, 5), (900, 4),
-                                                 (2000, 3)] if radius_q < thr), 2))),
+                    latitude=float(lat_q) if near_mode else 15.0,
+                    longitude=float(lon_q) if near_mode else 0.0,
+                    zoom=(next((z for thr, z in [(150, 6), (400, 5), (900, 4),
+                                                 (2000, 3)] if radius_q < thr), 2)
+                          if near_mode else 0.6)),
                 layers=[
                     pdk.Layer("ScatterplotLayer", id="hits", data=_mp,
                               get_position="[lon, lat]",
                               get_fill_color="color", get_radius=18000,
                               radius_min_pixels=4, pickable=True, auto_highlight=True),
-                    *([] if show_all else
+                    *([] if not near_mode else
                       [pdk.Layer("ScatterplotLayer", id="point", data=_pt,
                                  get_position="[lon, lat]",
                                  get_fill_color=[214, 40, 40], get_radius=26000,
                                  radius_min_pixels=7, pickable=False)])],
-                tooltip={"text": "float {wmo} · {type}\n{km away} km away"}),
+                tooltip={"text": "float {wmo} · {type}" + ("\n{km away} km away" if near_mode else "")}),
                 height=340, on_select="rerun", selection_mode="single-object",
                 key="matches_map")
             # clicking a dot opens that float, same as ticking its row
@@ -1030,14 +1025,14 @@ if q.strip() or model_q != "(any)" or type_q != "(any)" or loc_on:
                     for t in _present]
             if _other:
                 _leg.append(_dot(TYPE_COLOR_OTHER, "other"))
-            if not show_all:
+            if near_mode:
                 _leg.append(_dot([214, 40, 40, 255], "your search point"))
             st.markdown(
                 "<div style='font-size:0.95rem;opacity:0.85'>"
                 + " &nbsp;·&nbsp; ".join(_leg) + "</div>", unsafe_allow_html=True)
             st.caption(
-                (f"Every active float worldwide, at its last known fix"
-                 if show_all else
+                (f"Every float here matches your filters, at its last known fix"
+                 if not near_mode else
                  f"Each float's last known fix within {radius_q:,} km of "
                  f"({lat_q:.2f}, {lon_q:.2f})")
                 + " · blue = Core, green = BGC, darker = Deep · click a float to open "
@@ -1077,8 +1072,7 @@ if q.strip() or model_q != "(any)" or type_q != "(any)" or loc_on:
     # whatever is actually open on this same rerun rather than lagging one click.
     # Forget remembered clicks whenever the result set changes, and act only on a
     # *new* selection so the dropdown can still override the other two.
-    sig = (q, model_q, type_q, loc_on, lat_q, lon_q, radius_q, active_only,
-           show_all)
+    sig = (q, model_q, type_q, near_mode, lat_q, lon_q, radius_q, active_only)
     if st.session_state.get("_match_sig") != sig:
         st.session_state["_match_sig"] = sig
         st.session_state.pop("_last_row", None)
