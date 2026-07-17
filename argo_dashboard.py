@@ -772,7 +772,7 @@ if serial_q.strip() or wmo_q.strip() or model_q != "(any)":
     _age = (pd.Timestamp.now().normalize() - _lp).dt.days
     show.insert(2, "status", np.where(_lp.isna(), "unknown",
                                       np.where(_age <= ACTIVE_DAYS,
-                                               "🟢 active", "⚪ inactive")))
+                                               "active", "inactive")))
     show.insert(3, "last profile", _lp)
     if serial_hit:
         show.insert(4, "matched_on", show.pop("matched_on"))   # prominent, near the front
