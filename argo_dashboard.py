@@ -709,10 +709,12 @@ radius_q = 500
 active_only = True
 if loc_on:
     _lc1, _lc2 = st.sidebar.columns(2)
+    # defaults to the western Mediterranean: a dense, well-sampled spot that returns
+    # BGC, Core and Deep floats, so the first search a visitor runs is not empty
     lat_q = _lc1.number_input("Latitude", min_value=-90.0, max_value=90.0,
-                              value=36.5, step=0.5, format="%.2f")
+                              value=39.0, step=0.5, format="%.2f")
     lon_q = _lc2.number_input("Longitude", min_value=-180.0, max_value=180.0,
-                              value=-25.0, step=0.5, format="%.2f")
+                              value=5.0, step=0.5, format="%.2f")
     radius_q = st.sidebar.slider("Within (km)", min_value=25, max_value=3000,
                                  value=500, step=25,
                                  help="Great-circle distance from the point above.")
