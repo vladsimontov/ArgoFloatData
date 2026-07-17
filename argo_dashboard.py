@@ -19,6 +19,7 @@ import argparse
 import os
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -973,6 +974,58 @@ def _overlay_fig(profiles, show_band=True):
     return fig
 
 
+def fetch_raw_many(dac, wmo, cycles, is_bgc, progress=None):
+    """Fetch several per-cycle raw files from the GDAC in parallel. Returns
+    {cycle: (rel, status)} with status ok/missing/unreachable. Latency-bound, so a
+    small pool is a big win; capped low to stay polite to the GDAC. progress(done,
+    total, cycle) is called as each finishes."""
+    out, done = {}, 0
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(fetch_raw_profile, dac, wmo, c, is_bgc): c for c in cycles}
+        for f in as_completed(futs):
+            c = futs[f]
+            try:
+                out[c] = f.result()
+            except Exception:
+                out[c] = (None, "unreachable")
+            done += 1
+            if progress:
+                progress(done, len(cycles), c)
+    return out
+
+
+def raw_cycle_frame(path, cycle):
+    """One cycle's raw file -> a wide tidy frame: cycle/time/lat/lon/pres + every
+    numeric measurand on the PRES grid (intermediate sensor signals included)."""
+    rds = load_raw(path)
+    if "PRES" not in rds:
+        return None, {}
+    P = np.asarray(rds["PRES"].values, dtype="float64")
+    if P.ndim == 1:
+        P = P.reshape(1, -1)
+    nprof, nlev = P.shape
+    dims = rds["PRES"].dims
+    cols, units = {"pres": P.ravel()}, {}
+    for v in rds.data_vars:
+        if (v != "PRES" and rds[v].dims == dims
+                and np.issubdtype(rds[v].dtype, np.number) and not v.endswith("_QC")):
+            a = np.asarray(rds[v].values, dtype="float64")
+            if a.ndim == 1:
+                a = a.reshape(1, -1)
+            if a.shape == (nprof, nlev):
+                cols[v] = a.ravel()
+                units[v] = rds[v].attrs.get("units")
+    df = pd.DataFrame(cols)
+    df.insert(0, "cycle", cycle)
+    # per-profile fields broadcast down the levels
+    for name, key in (("time", "JULD"), ("lat", "LATITUDE"), ("lon", "LONGITUDE")):
+        if key in rds:
+            v = np.asarray(rds[key].values).ravel()
+            if len(v) >= nprof:
+                df[name] = np.repeat(v[:nprof].reshape(nprof, 1), nlev, 1).ravel()
+    return df, units
+
+
 # ---- per-float views as tabs (sidebar search + results table stay global) ----
 tab_over, tab_traj, tab_prof, tab_overlay, tab_ts, tab_raw = st.tabs(
     ["Overview", "Trajectory", "Profile & Trend", "Overlay", "T-S", "Raw"])
@@ -1449,12 +1502,12 @@ with tab_prof:          # re-enter to append the trend to the Profile & Trend ta
 
 # ===================== Raw: per-cycle diagnostic profile =====================
 with tab_raw:
-    st.subheader("Raw profile (per-cycle diagnostics)")
-    st.caption("Pulls a single cycle's raw NetCDF straight from the GDAC, with every "
-               "parameter it reports, including intermediate sensor signals (raw "
-               "fluorescence, backscatter, optode phase, and so on) that are not carried "
-               "into the synthetic product. One profile at a time, unadjusted and with "
-               "no QC filtering.")
+    st.subheader("Raw profiles (per-cycle diagnostics)")
+    st.caption("Pulls per-cycle raw NetCDFs straight from the GDAC, with every parameter "
+               "they report, including intermediate sensor signals (raw fluorescence, "
+               "backscatter, optode phase, and so on) that are not carried into the "
+               "synthetic product. Unadjusted and with no QC filtering. Each cycle is a "
+               "separate download, so pulling many takes a while.")
     _is_bgc = str(frow.get("data_kind")) == "bgc" if frow is not None else False
     _dac = frow.get("dac") if frow is not None else None
     _cyc_vals = (sorted({int(c) for c in np.asarray(ds["CYCLE_NUMBER"].values).ravel()
@@ -1462,62 +1515,203 @@ with tab_raw:
     if not _dac or not _cyc_vals:
         st.info("No per-cycle files are available for this float.")
     else:
-        rc1, rc2 = st.columns([1, 2])
-        sel_cyc = rc1.selectbox("Cycle (profile)", _cyc_vals, index=len(_cyc_vals) - 1,
-                                help="Each cycle is one dive. Pulls that cycle's raw file "
-                                     "from the GDAC, cached after the first load.")
-        _kind = "B-file" if _is_bgc else "profile file"
-        with st.spinner(f"Fetching cycle {sel_cyc} {_kind} from the GDAC"):
-            raw_rel, raw_status = fetch_raw_profile(_dac, sel_wmo, sel_cyc, _is_bgc)
-        if not raw_rel and raw_status == "unreachable":
-            st.error(f"Couldn't reach the Argo GDAC to fetch cycle {sel_cyc}. This looks "
-                     "like a connection problem, not a missing file. Please try again in "
-                     "a moment.")
-        elif not raw_rel:
-            st.warning(f"No raw file exists at the GDAC for cycle {sel_cyc} of this float. "
-                       "Checked both the delayed-mode and real-time file names, and "
-                       "neither is there. Try another cycle.")
+        # per-cycle date/position from the synthetic file, so the picker has context
+        _cn = np.asarray(ds["CYCLE_NUMBER"].values).ravel()
+        _meta = {}
+        for _k, _v in (("time", "JULD"), ("lat", "LATITUDE"), ("lon", "LONGITUDE")):
+            _meta[_k] = (np.asarray(ds[_v].values).ravel() if _v in ds
+                         else np.full(_cn.shape, np.nan))
+        _by_cyc = {}
+        for _i, _c in enumerate(_cn):
+            if np.isfinite(_c) and int(_c) not in _by_cyc:
+                _by_cyc[int(_c)] = (_meta["time"][_i], _meta["lat"][_i], _meta["lon"][_i])
+
+        # ---- selection: checkboxes we can also drive from the quick-select buttons ----
+        _sel = st.session_state.setdefault("raw_pick", {_cyc_vals[-1]})   # default: latest
+        _ver = st.session_state.setdefault("raw_pick_ver", 0)
+
+        def _set_pick(cycles):
+            st.session_state["raw_pick"] = set(cycles)
+            st.session_state["raw_pick_ver"] = st.session_state["raw_pick_ver"] + 1
+
+        qa, qb, qc, qd = st.columns([1, 1, 1, 2])
+        if qa.button("Latest", help="Select only the most recent cycle."):
+            _set_pick([_cyc_vals[-1]]); st.rerun()
+        if qb.button("All", help=f"Select all {len(_cyc_vals)} cycles."):
+            _set_pick(_cyc_vals); st.rerun()
+        if qc.button("None"):
+            _set_pick([]); st.rerun()
+        _nth = qd.number_input("Every Nth cycle", min_value=1,
+                               max_value=max(1, len(_cyc_vals)), value=10, step=1,
+                               help="Sample the whole record without pulling every "
+                                    "cycle. Press Apply to tick those boxes.")
+        if qd.button(f"Apply every {int(_nth)}th"):
+            _set_pick(_cyc_vals[::int(_nth)]); st.rerun()
+
+        _tbl = pd.DataFrame({
+            "pull": [c in _sel for c in _cyc_vals],
+            "cycle": _cyc_vals,
+            "date": [pd.to_datetime(_by_cyc.get(c, (np.nan,) * 3)[0], errors="coerce")
+                     for c in _cyc_vals],
+            "lat": [_by_cyc.get(c, (np.nan,) * 3)[1] for c in _cyc_vals],
+            "lon": [_by_cyc.get(c, (np.nan,) * 3)[2] for c in _cyc_vals],
+        })
+        _ed = st.data_editor(
+            _tbl, hide_index=True, height=260, key=f"raw_tbl_{_ver}",
+            disabled=["cycle", "date", "lat", "lon"],
+            column_config={
+                "pull": st.column_config.CheckboxColumn(
+                    "pull", help="Tick the cycles to download."),
+                "cycle": st.column_config.NumberColumn("cycle", format="%d"),
+                "date": st.column_config.DatetimeColumn("date", format="YYYY-MM-DD"),
+                "lat": st.column_config.NumberColumn("lat", format="%.2f"),
+                "lon": st.column_config.NumberColumn("lon", format="%.2f")})
+        chosen = [int(c) for c in _ed.loc[_ed["pull"], "cycle"].tolist()]
+
+        if not chosen:
+            st.info("Tick at least one cycle above, then pull.")
         else:
-            raw_ds = load_raw(os.path.join(ROOT, raw_rel))
-            _pdims = raw_ds["PRES"].dims if "PRES" in raw_ds else None
-            raw_params = [v for v in raw_ds.data_vars
-                          if _pdims is not None and v != "PRES"
-                          and raw_ds[v].dims == _pdims
-                          and np.issubdtype(raw_ds[v].dtype, np.number)
-                          and not v.endswith("_QC")]
-            if not raw_params:
-                st.info(f"`{os.path.basename(raw_rel)}` reports no plottable measurands.")
+            if len(chosen) > 25:
+                st.warning(f"{len(chosen)} cycles is {len(chosen)} separate GDAC "
+                           f"downloads, roughly {max(1, round(len(chosen) / 8 * 1.5))}s "
+                           "or more, and it re-runs if you touch another control while "
+                           "it works. Consider 'Every Nth' to sample the record instead.")
+            if st.button(f"Pull {len(chosen)} profile(s) from the GDAC", type="primary"):
+                _kind = "B-file" if _is_bgc else "profile file"
+                with st.status(f"Downloading {len(chosen)} {_kind}(s) from the GDAC",
+                               expanded=True) as _stat:
+                    _bar = st.progress(0.0, text="Starting…")
+
+                    def _tick(done, total, cyc):
+                        _bar.progress(done / total,
+                                      text=f"{done}/{total} downloaded (cycle {cyc})")
+
+                    _res = fetch_raw_many(_dac, sel_wmo, chosen, _is_bgc, _tick)
+                    _ok = {c: r for c, (r, s) in _res.items() if r}
+                    _missing = [c for c, (r, s) in _res.items() if not r and s == "missing"]
+                    _unreach = [c for c, (r, s) in _res.items()
+                                if not r and s == "unreachable"]
+                    _bar.progress(1.0, text=f"{len(_ok)}/{len(chosen)} downloaded")
+                    _frames, _units = [], {}
+                    for _c in sorted(_ok):
+                        _f, _u = raw_cycle_frame(os.path.join(ROOT, _ok[_c]), _c)
+                        if _f is not None:
+                            _frames.append(_f)
+                            _units.update({k: v for k, v in _u.items() if v})
+                    _stat.update(
+                        label=(f"{len(_ok)} downloaded · {len(_missing)} missing · "
+                               f"{len(_unreach)} unreachable"), state="complete",
+                        expanded=False)
+                st.session_state["raw_data"] = (
+                    pd.concat(_frames, ignore_index=True) if _frames else None)
+                st.session_state["raw_units"] = _units
+                st.session_state["raw_report"] = (len(_ok), _missing, _unreach)
+
+            raw_df = st.session_state.get("raw_data")
+            if raw_df is None:
+                st.caption("Nothing pulled yet.")
             else:
-                _def = next((i for i, v in enumerate(raw_params)
-                             if not v.endswith("_ADJUSTED")), 0)
-                sel_rp = rc2.selectbox("Measurand (raw)", raw_params, index=_def,
-                                       help="Every parameter in the raw file, including "
-                                            "intermediate sensor signals.")
-                st.caption(f"Source: `{os.path.basename(raw_rel)}`, "
-                           f"{raw_ds.sizes.get('N_PROF', 1)} profile(s) in this cycle.")
-                pres = np.asarray(raw_ds["PRES"].values, dtype="float64").ravel()
-                val = np.asarray(raw_ds[sel_rp].values, dtype="float64").ravel()
-                m = np.isfinite(pres) & np.isfinite(val)
-                if not m.any():
-                    st.warning(f"No finite `{sel_rp}` samples in cycle {sel_cyc}.")
+                _n_ok, _missing, _unreach = st.session_state.get(
+                    "raw_report", (0, [], []))
+                if _unreach:
+                    st.error(f"Couldn't reach the GDAC for {len(_unreach)} cycle(s) "
+                             f"({', '.join(map(str, _unreach[:8]))}"
+                             f"{'…' if len(_unreach) > 8 else ''}). That's a connection "
+                             "problem, not a missing file; pull again to retry.")
+                if _missing:
+                    st.warning(f"No raw file exists at the GDAC for {len(_missing)} "
+                               f"cycle(s) ({', '.join(map(str, _missing[:8]))}"
+                               f"{'…' if len(_missing) > 8 else ''}).")
+                _units = st.session_state.get("raw_units", {})
+                _pulled = sorted(raw_df["cycle"].unique().tolist())
+                raw_params = [c for c in raw_df.columns
+                              if c not in ("cycle", "pres", "time", "lat", "lon")]
+                if not raw_params:
+                    st.info("These raw files report no plottable measurands.")
                 else:
-                    units = raw_ds[sel_rp].attrs.get("units")
-                    xlab = f"{sel_rp} [{units}]" if units else sel_rp
-                    figr = go.Figure(go.Scattergl(
-                        x=val[m], y=pres[m], mode="markers+lines",
-                        marker=dict(size=5, color="#0b7285"),
-                        line=dict(color="rgba(11,114,133,0.35)", width=1),
-                        hovertemplate=f"{sel_rp}=%{{x:.4g}}<br>PRES=%{{y:.1f}} dbar"
-                                      "<extra></extra>"))
-                    figr.update_xaxes(title=xlab)
-                    figr.update_yaxes(autorange="reversed", title="PRES [decibar]")
-                    figr.update_layout(height=560)
-                    _titled(figr, f"{float_tag} · cycle {sel_cyc} raw {sel_rp}")
-                    st.plotly_chart(figr, width="stretch")
-                    with open(os.path.join(ROOT, raw_rel), "rb") as _f:
-                        st.download_button("Download this raw cycle (NetCDF)", _f.read(),
-                                           file_name=os.path.basename(raw_rel),
-                                           mime="application/x-netcdf", key="raw_dl")
+                    _rdef = [p for p in raw_params if not p.endswith("_ADJUSTED")][:1]
+                    mc1, mc2 = st.columns([2, 1])
+                    rmeas = mc1.multiselect(
+                        "Measurands (raw, up to 4)", raw_params,
+                        default=_rdef or raw_params[:1], max_selections=4,
+                        help="Every parameter in the raw files, including intermediate "
+                             "sensor signals. Each gets its own color-matched x-axis "
+                             "over the shared pressure axis.")
+                    _auto = "Individual casts" if len(rmeas) == 1 else "Mean ± 1σ"
+                    mode = mc2.radio(
+                        "Show", ["Individual casts", "Mean ± 1σ"],
+                        index=0 if _auto == "Individual casts" else 1,
+                        help="Individual casts colors every profile by date, best for "
+                             "spotting drift or an odd cast. Mean ± 1σ averages across "
+                             "the pulled profiles, best for comparing measurands.")
+                    st.caption(f"{len(_pulled)} profile(s) pulled · cycles "
+                               f"{_pulled[0]} to {_pulled[-1]} · {len(raw_df):,} levels.")
+                    if not rmeas:
+                        st.info("Pick a measurand to plot.")
+                    elif mode == "Individual casts" and len(rmeas) == 1:
+                        m0 = rmeas[0]
+                        figr = go.Figure()
+                        _cyc_list = _pulled
+                        _cols = (px.colors.sample_colorscale(
+                            "Viridis", [i / max(1, len(_cyc_list) - 1)
+                                        for i in range(len(_cyc_list))])
+                            if len(_cyc_list) > 1 else ["#0b7285"])
+                        for _i, _c in enumerate(_cyc_list):
+                            _s = raw_df[raw_df["cycle"] == _c]
+                            _mk = np.isfinite(_s["pres"]) & np.isfinite(_s[m0])
+                            if not _mk.any():
+                                continue
+                            _d = (pd.to_datetime(_s["time"].iloc[0], errors="coerce")
+                                  if "time" in _s else pd.NaT)
+                            figr.add_trace(go.Scattergl(
+                                x=_s.loc[_mk, m0], y=_s.loc[_mk, "pres"],
+                                mode="lines", line=dict(color=_cols[_i], width=1.4),
+                                name=f"cycle {_c}", showlegend=False,
+                                hovertemplate=(f"cycle {_c}"
+                                               + (f" · {_d:%Y-%m-%d}"
+                                                  if pd.notna(_d) else "")
+                                               + f"<br>{m0}=%{{x:.4g}}"
+                                               "<br>PRES=%{y:.1f} dbar<extra></extra>")))
+                        _u0 = _units.get(m0)
+                        figr.update_xaxes(title=f"{m0} [{_u0}]" if _u0 else m0)
+                        figr.update_yaxes(autorange="reversed", title="PRES [decibar]")
+                        figr.update_layout(height=600)
+                        _titled(figr, f"{float_tag} · raw {m0} · {len(_cyc_list)} cast(s)")
+                        st.plotly_chart(figr, width="stretch")
+                        if len(_cyc_list) > 1:
+                            st.caption("Dark to light = oldest to newest cycle.")
+                    else:
+                        profiles = []
+                        for m in rmeas:
+                            _sub = (raw_df[["pres", m]].rename(columns={m: "value"}))
+                            _mp = _stat_profile(_sub)
+                            if _mp is None:
+                                continue
+                            profiles.append((m, _mp[0], _mp[1], _mp[2], _units.get(m)))
+                        if not profiles:
+                            st.warning("No finite samples for these measurands.")
+                        else:
+                            st.plotly_chart(
+                                _overlay_fig(profiles, len(_pulled) > 1),
+                                width="stretch")
+                            st.caption(
+                                f"Mean over {len(_pulled)} pulled profile(s)"
+                                + (", shaded to ±1 standard deviation"
+                                   if len(_pulled) > 1 else "")
+                                + "; each measurand keeps its own color and x-axis.")
+                    _csv_cols = (["cycle", "time", "lat", "lon", "pres"]
+                                 + [c for c in (rmeas or raw_params)])
+                    _csv_cols = [c for c in _csv_cols if c in raw_df.columns]
+                    _out = raw_df[_csv_cols].copy()
+                    _out.insert(0, "wmo", sel_wmo)
+                    st.download_button(
+                        f"Download all {len(_pulled)} raw profile(s) as one CSV "
+                        f"({len(_out):,} rows)",
+                        _out.to_csv(index=False).encode(),
+                        file_name=f"{sel_wmo}_raw_{_pulled[0]}-{_pulled[-1]}.csv",
+                        mime="text/csv", key="raw_csv_all",
+                        help="One row per level per cycle, with the selected measurands "
+                             "plus cycle, time and position.")
 
 # ===================== Overlay: multi-measurand profile over a cycle range =====================
 with tab_overlay:
