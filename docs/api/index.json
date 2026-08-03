@@ -7,7 +7,7 @@
     "floats": 20384,
     "sensor_rows": 75680
   },
-  "data_through": 20260802033212,
+  "data_through": 20260803041047,
   "description": "Search the whole Argo array by sensor serial number, model, WMO, region, or type. Query the Parquet files directly with DuckDB or pandas over HTTP.",
   "files": {
     "floats.json": {
