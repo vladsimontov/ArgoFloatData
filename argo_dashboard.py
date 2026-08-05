@@ -1460,15 +1460,21 @@ def _merge_core_ts(df, core_path, nprof, nlev, units):
     if CP.shape == (nprof, nlev):
         for k, arr in want.items():
             df[k] = arr
-        return df
+    else:
+        # grids differ: align on (n_prof, pressure). Drop fill pressures first so the
+        # repeated 99999 padding can't fan a left join out into a many-to-many blow-up.
+        core = pd.DataFrame({"n_prof": np.repeat(np.arange(CP.shape[0]), CP.shape[1]),
+                             "pres": CP.ravel(), **want})
+        core = core[np.isfinite(core["pres"]) & (core["pres"] < 90000)]
+        core = core.drop_duplicates(subset=["n_prof", "pres"], keep="first")
+        df = df.merge(core, on=["n_prof", "pres"], how="left")
 
-    # grids differ: align on (n_prof, pressure). Drop fill pressures first so the
-    # repeated 99999 padding can't fan a left join out into a many-to-many blow-up.
-    core = pd.DataFrame({"n_prof": np.repeat(np.arange(CP.shape[0]), CP.shape[1]),
-                         "pres": CP.ravel(), **want})
-    core = core[np.isfinite(core["pres"]) & (core["pres"] < 90000)]
-    core = core.drop_duplicates(subset=["n_prof", "pres"], keep="first")
-    return df.merge(core, on=["n_prof", "pres"], how="left")
+    # sit T/S (and their QC) right after the pressure column, not at the far end,
+    # so the CTD reading reads next to the depth it was taken at
+    added = [c for c in want if c in df.columns]
+    rest = [c for c in df.columns if c not in added]
+    i = rest.index("pres") + 1
+    return df[rest[:i] + added + rest[i:]]
 
 
 def raw_cycle_frame(path, cycle, core_path=None):
