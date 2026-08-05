@@ -1419,11 +1419,64 @@ def _human_bytes(n):
         x /= 1024
 
 
-def raw_cycle_frame(path, cycle):
+def _merge_core_ts(df, core_path, nprof, nlev, units):
+    """Splice the CTD's TEMP/PSAL (and their QC) from a core profile file onto a BGC
+    B-file frame for the same cycle. A BGC B-file holds PRES + biogeochemistry but
+    not TEMP/PSAL; the core file for that cycle carries them on an identical PRES
+    axis (same N_PROF/N_LEVELS). When the grids match we drop the columns straight
+    on by position (no float-equality risk); if they somehow differ we align on
+    pressure and leave unmatched rows blank rather than invent values."""
+    try:
+        cds = load_raw(core_path)
+    except Exception:
+        return df
+    if "PRES" not in cds:
+        return df
+    CP = np.asarray(cds["PRES"].values, dtype="float64")
+    if CP.ndim == 1:
+        CP = CP.reshape(1, -1)
+    cdims = cds["PRES"].dims
+
+    want = {}
+    for v in ("TEMP", "PSAL"):
+        if v not in cds or cds[v].dims != cdims:
+            continue
+        a = np.asarray(cds[v].values, dtype="float64")
+        a = a.reshape(1, -1) if a.ndim == 1 else a
+        if a.shape != CP.shape:
+            continue
+        want[v] = a.ravel()
+        units[v] = cds[v].attrs.get("units")
+        q = f"{v}_QC"
+        if q in cds:
+            qa = np.asarray(cds[q].values)
+            qa = qa.reshape(1, -1) if qa.ndim == 1 else qa
+            if qa.shape == CP.shape:
+                f = np.array([_flag_str(x) for x in qa.ravel()], dtype=object)
+                want[q] = np.where(np.isin(f, ("", " ", "nan", "None", "--")), "", f)
+    if not want:
+        return df
+
+    if CP.shape == (nprof, nlev):
+        for k, arr in want.items():
+            df[k] = arr
+        return df
+
+    # grids differ: align on (n_prof, pressure). Drop fill pressures first so the
+    # repeated 99999 padding can't fan a left join out into a many-to-many blow-up.
+    core = pd.DataFrame({"n_prof": np.repeat(np.arange(CP.shape[0]), CP.shape[1]),
+                         "pres": CP.ravel(), **want})
+    core = core[np.isfinite(core["pres"]) & (core["pres"] < 90000)]
+    core = core.drop_duplicates(subset=["n_prof", "pres"], keep="first")
+    return df.merge(core, on=["n_prof", "pres"], how="left")
+
+
+def raw_cycle_frame(path, cycle, core_path=None):
     """One cycle's raw file -> a wide tidy frame: cycle/time/lat/lon/pres + every
     numeric measurand on the PRES grid (intermediate sensor signals included) plus
     each parameter's decoded QC flag, so a CSV export carries everything the file
-    holds for offline work."""
+    holds for offline work. For a BGC float, pass core_path to merge the CTD's
+    TEMP/PSAL in from the core file for the same cycle (see _merge_core_ts)."""
     rds = load_raw(path)
     if "PRES" not in rds:
         return None, {}
@@ -1472,6 +1525,8 @@ def raw_cycle_frame(path, cycle):
             v = np.asarray(rds[key].values).ravel()
             if len(v) >= nprof:
                 df[name] = np.repeat(v[:nprof].reshape(nprof, 1), nlev, 1).ravel()
+    if core_path:
+        df = _merge_core_ts(df, core_path, nprof, nlev, units)
     return df, units
 
 
@@ -1828,9 +1883,11 @@ with tab_prof:          # re-enter to append the trend to the Profile & Trend ta
             help="Defaults to the shallowest available level (closest to the "
                  "surface). For each profile the nearest available level is used.")
         max_gap = tcol2.number_input(
-            "Max distance from target (dbar)", min_value=0.0, value=25.0, step=5.0,
+            "Max distance from target (dbar)", min_value=0.0, value=3.0, step=1.0,
             help="Drop profiles whose nearest sample is farther than this "
-                 "from the target pressure.")
+                 "from the target pressure. Tight by default (3 dbar) so a point "
+                 "reflects that pressure; widen it if the record is sparsely "
+                 "sampled and profiles drop out.")
         near = (df.assign(dp=(df["pres"] - target_p).abs())
                   .sort_values("dp").groupby("cycle", as_index=False).first())
         near = near[near["dp"] <= max_gap].sort_values("time")
@@ -2048,30 +2105,47 @@ with tab_raw:
                            "it works. Consider 'Every Nth' to sample the record instead.")
             if st.button(f"Pull {len(chosen)} profile(s) from the GDAC", type="primary"):
                 _kind = "B-file" if _is_bgc else "profile file"
+                # A BGC pull is two downloads per cycle: the B-file (biogeochemistry)
+                # and the core file (the CTD's TEMP/PSAL), merged on a shared PRES axis.
+                _phases = 2 if _is_bgc else 1
                 with st.status(f"Downloading {len(chosen)} {_kind}(s) from the GDAC",
                                expanded=True) as _stat:
                     _bar = st.progress(0.0, text="Starting…")
 
-                    def _tick(done, total, cyc):
-                        _bar.progress(done / total,
-                                      text=f"{done}/{total} downloaded (cycle {cyc})")
+                    def _tick(phase, what):
+                        def _t(done, total, cyc):
+                            _bar.progress((phase + done / total) / _phases,
+                                          text=f"{done}/{total} {what} (cycle {cyc})")
+                        return _t
 
-                    _res = fetch_raw_many(_dac, sel_wmo, chosen, _is_bgc, _tick)
+                    _res = fetch_raw_many(_dac, sel_wmo, chosen, _is_bgc,
+                                          _tick(0, f"{_kind}s"))
                     _ok = {c: r for c, (r, s) in _res.items() if r}
                     _missing = [c for c, (r, s) in _res.items() if not r and s == "missing"]
                     _unreach = [c for c, (r, s) in _res.items()
                                 if not r and s == "unreachable"]
+                    # BGC B-files omit the CTD's TEMP/PSAL; pull the matching core
+                    # files so T and S ride along in the plots and the CSV export.
+                    _core = {}
+                    if _is_bgc and _ok:
+                        _cres = fetch_raw_many(_dac, sel_wmo, sorted(_ok), False,
+                                               _tick(1, "core T/S file"))
+                        _core = {c: r for c, (r, s) in _cres.items() if r}
                     _bar.progress(1.0, text=f"{len(_ok)}/{len(chosen)} downloaded")
                     _frames, _units = [], {}
                     for _c in sorted(_ok):
-                        _f, _u = raw_cycle_frame(os.path.join(ROOT, _ok[_c]), _c)
+                        _cp = (os.path.join(ROOT, _core[_c]) if _c in _core else None)
+                        _f, _u = raw_cycle_frame(os.path.join(ROOT, _ok[_c]), _c,
+                                                 core_path=_cp)
                         if _f is not None:
                             _frames.append(_f)
                             _units.update({k: v for k, v in _u.items() if v})
+                    _ts_note = (f" · T/S merged for {len(_core)}/{len(_ok)}"
+                                if _is_bgc else "")
                     _stat.update(
                         label=(f"{len(_ok)} downloaded · {len(_missing)} missing · "
-                               f"{len(_unreach)} unreachable"), state="complete",
-                        expanded=False)
+                               f"{len(_unreach)} unreachable{_ts_note}"),
+                        state="complete", expanded=False)
                 st.session_state["raw_data"] = (
                     pd.concat(_frames, ignore_index=True) if _frames else None)
                 st.session_state["raw_units"] = _units
