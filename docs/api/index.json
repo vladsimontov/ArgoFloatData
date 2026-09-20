@@ -1,13 +1,13 @@
 {
   "base_url": "https://vladsimontov.github.io/ArgoFloatData/api/",
   "counts": {
-    "bgc": 2969,
-    "core": 17569,
+    "bgc": 2970,
+    "core": 17572,
     "deep": 596,
-    "floats": 20537,
-    "sensor_rows": 76364
+    "floats": 20541,
+    "sensor_rows": 76386
   },
-  "data_through": 20260919065331,
+  "data_through": 20260920063940,
   "description": "Search the whole Argo array by sensor serial number, model, WMO, region, or type. Query the Parquet files directly with DuckDB or pandas over HTTP.",
   "files": {
     "floats.json": {
@@ -23,7 +23,7 @@
         "n_profiles",
         "data_url"
       ],
-      "rows": 20538
+      "rows": 20542
     },
     "floats.parquet": {
       "columns": [
@@ -51,7 +51,7 @@
         "wmo",
         "wmo_inst_type"
       ],
-      "rows": 20538
+      "rows": 20542
     },
     "sensors.parquet": {
       "columns": [
@@ -70,7 +70,7 @@
         "wmo",
         "wmo_inst_type"
       ],
-      "rows": 76364
+      "rows": 76386
     }
   },
   "license": "Argo data: CC BY 4.0, cite https://doi.org/10.17882/42182",
