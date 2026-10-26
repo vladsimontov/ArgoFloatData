@@ -666,6 +666,15 @@ def parse_argo_date(v):
     return pd.NaT
 
 
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Great-circle distance in km; lat2/lon2 may be arrays (vectorized)."""
+    R = 6371.0088
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dp, dl = p2 - p1, np.radians(lon2 - lon1)
+    a = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
+    return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
 @st.cache_data(show_spinner=False)
 def weekly_churn(root, days, today):
     """Floats launched within the last 7 days, and floats whose last report crossed
@@ -1333,6 +1342,58 @@ def page_compare():
         for _n in _notes:
             st.info(_n)
         st.stop()
+    # who is being compared, straight from the index: identity, deployment and
+    # record, then how far apart the floats are in space and time
+    _sum_rows = []
+    for _w, _d, _typ in _loaded:
+        _r = floats[floats["wmo"].astype(str) == _w].iloc[0]
+        _la, _lo = _r.get("last_lat"), _r.get("last_lon")
+        _sum_rows.append({
+            "WMO": _w, "type": _typ,
+            "platform": str(_r.get("platform_type") or "-").strip() or "-",
+            "project": str(_r.get("project_name") or "-").strip() or "-",
+            "launched": parse_argo_date(_r.get("launch_date")),
+            "last profile": parse_argo_date(_r.get("last_date")),
+            "profiles": pd.to_numeric(_r.get("n_profiles"), errors="coerce"),
+            "approx region": (f"{climate_band(float(_la))} "
+                              f"{ocean_basin(float(_la), float(_lo))}"
+                              if pd.notna(_la) and pd.notna(_lo) else "-"),
+            "_lat": _la, "_lon": _lo,
+        })
+    st.dataframe(
+        pd.DataFrame(_sum_rows).drop(columns=["_lat", "_lon"]),
+        width="stretch", hide_index=True,
+        column_config={
+            "launched": st.column_config.DatetimeColumn(
+                "launched", format="YYYY-MM-DD",
+                help="Deployment date from the float's meta file."),
+            "last profile": st.column_config.DatetimeColumn(
+                "last profile", format="YYYY-MM-DD"),
+            "profiles": st.column_config.NumberColumn("profiles", format="%d"),
+        })
+    _pair_bits = []
+    for _i in range(len(_sum_rows)):
+        for _j in range(_i + 1, len(_sum_rows)):
+            _a, _b = _sum_rows[_i], _sum_rows[_j]
+            _bits = []
+            if (pd.notna(_a["_lat"]) and pd.notna(_a["_lon"])
+                    and pd.notna(_b["_lat"]) and pd.notna(_b["_lon"])):
+                _km = float(haversine_km(float(_a["_lat"]), float(_a["_lon"]),
+                                         float(_b["_lat"]), float(_b["_lon"])))
+                _bits.append(f"last fixes {_km:,.0f} km "
+                             f"({_km * 0.621371:,.0f} mi) apart")
+            if pd.notna(_a["launched"]) and pd.notna(_b["launched"]):
+                _bits.append(f"launched "
+                             f"{abs((_a['launched'] - _b['launched']).days):,} "
+                             "days apart")
+            if _bits:
+                _pair_bits.append(f"**{_a['WMO']} vs {_b['WMO']}**: "
+                                  + " · ".join(_bits))
+    if _pair_bits:
+        st.markdown("  \n".join(_pair_bits))
+        st.caption("Distances compare each float's last known fix. Floats drift, "
+                   "so this is where they were last heard from, not a "
+                   "full-history separation.")
     _common = set.intersection(*[_plottable_params(d) for _w, d, _t in _loaded])
     _common -= {"PRES", "MTIME"}
     _opts = sorted(_common)
@@ -1562,15 +1623,6 @@ st.sidebar.caption(
     "freely shared under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). "
     "[doi.org/10.17882/42182](https://doi.org/10.17882/42182). "
     "With thanks. See **Acknowledgements** up top.")
-
-def haversine_km(lat1, lon1, lat2, lon2):
-    """Great-circle distance in km; lat2/lon2 may be arrays (vectorized)."""
-    R = 6371.0088
-    p1, p2 = np.radians(lat1), np.radians(lat2)
-    dp, dl = p2 - p1, np.radians(lon2 - lon1)
-    a = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
-    return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
-
 
 @st.cache_data(show_spinner=False)
 def active_wmo_set(root, days):
