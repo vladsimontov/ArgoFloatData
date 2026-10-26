@@ -734,6 +734,101 @@ def showcase_picks(root, days, today):
     return picks, sorted(fl.loc[active, "wmo"].astype(str))
 
 
+def _split_pi_field(raw):
+    """One pi_name field -> [(person, maybe_truncated)]. Fields hold lists
+    ('A, B', 'A/B', surname-only rosters) and the odd 'n/a'; junk drops out.
+    Argo meta strings are fixed width, so the LAST person of a long roster can
+    be cut mid-name ('..., KEN JOHNSO'); the flag marks that suspicion."""
+    s = str(raw).strip()
+    if not s or s.lower() in ("n/a", "na", "unknown", "-", "none"):
+        return []
+    truncated = len(s) >= 60
+    for sep in ("/", ";", " and ", " AND ", " And "):
+        s = s.replace(sep, ",")
+    out = []
+    for part in s.split(","):
+        part = " ".join(part.replace(".", " ").split())
+        if sum(c.isalpha() for c in part) >= 2:
+            out.append(part)
+    return [(p, truncated and i == len(out) - 1) for i, p in enumerate(out)]
+
+
+def _pi_key(person):
+    """(SURNAME|first initial) key that folds case, initials and nicknames into
+    one person. In a mixed-case name the all-caps token is the surname (Coriolis
+    style, 'Xavier ANDRE'); otherwise the last token is. A single-token name
+    keys as the bare surname and may fold into a full name later."""
+    toks = [t for t in person.replace("-", " ").split()
+            if any(c.isalpha() for c in t)]
+    if not toks:
+        return None
+    if len(toks) == 1:
+        return toks[0].upper()
+    ups = [t for t in toks if t.isupper() and len(t) > 1]
+    sur = ups[-1] if (ups and len(ups) < len(toks)) else toks[-1]
+    first = next((t for t in toks if t is not sur), toks[0])
+    return f"{sur.upper()}|{first[0].upper()}"
+
+
+@st.cache_data(show_spinner=False)
+def pi_directory(root):
+    """The PI dropdown's people. Argo pi_name fields mix case, initials, name
+    order and multi-PI rosters, so one person appears under many spellings
+    ('STEPHEN RISER', 'Steve Riser', 'STEPHEN RISER/KEN JOHNSON'). Split the
+    rosters, key each person by (surname, first initial), label the group with
+    its most common full spelling, and remember every raw field value a person
+    appears in, so filtering on them matches solo and team floats alike.
+    Bare-surname mentions fold into the full name when unambiguous.
+    Returns (labels sorted by surname, {label: set of raw pi_name values})."""
+    s, _fl = load_tables(root)
+    if s is None or "pi_name" not in s.columns:
+        return [], {}
+    raw = s["pi_name"].dropna().astype(str).str.strip()
+    counts = raw[raw != ""].value_counts()
+    groups, suspects = {}, {}
+    for rv, n in counts.items():
+        for person, trunc in _split_pi_field(rv):
+            k = _pi_key(person)
+            if k is None:
+                continue
+            tgt = suspects if trunc else groups
+            g = tgt.setdefault(k, {"sp": {}, "raws": set()})
+            g["sp"][person] = g["sp"].get(person, 0) + int(n)
+            g["raws"].add(rv)
+    # fold truncated tail names into the unique full person they prefix; the cut
+    # spelling never becomes a label, only its floats carry over
+    for k, g in suspects.items():
+        if k in groups:
+            groups[k]["raws"] |= g["raws"]
+            continue
+        if "|" in k:
+            _sur, _ini = k.split("|")
+            cands = [fk for fk in groups if "|" in fk
+                     and fk.split("|")[1] == _ini
+                     and fk.split("|")[0].startswith(_sur)]
+        else:
+            cands = [fk for fk in groups
+                     if (fk.split("|")[0] if "|" in fk else fk).startswith(k)]
+        if len(cands) == 1:
+            groups[cands[0]]["raws"] |= g["raws"]
+        else:
+            groups[k] = g    # ambiguous or unknown: keep it rather than lose floats
+    # 'WIJFFELS, JAYNE, ROBBINS' style rosters: a bare surname joins the one
+    # full-name group with that surname; ambiguous surnames stay their own entry
+    for k in [x for x in list(groups) if "|" not in x]:
+        full = [fk for fk in groups if "|" in fk and fk.split("|")[0] == k]
+        if len(full) == 1:
+            groups[full[0]]["raws"] |= groups[k]["raws"]
+            groups.pop(k)
+    label_map, by_surname = {}, {}
+    for k, g in groups.items():
+        best = max(g["sp"].items(), key=lambda kv: (kv[1], len(kv[0])))[0].title()
+        label_map.setdefault(best, set()).update(g["raws"])
+        by_surname[best] = k.split("|")[0].title()
+    labels = sorted(label_map, key=lambda L: (by_surname.get(L, L), L))
+    return labels, label_map
+
+
 @st.cache_data(show_spinner=False)
 def fleet_history(root, today):
     """Per-float launch/last timestamps plus type and platform model: the raw
@@ -987,7 +1082,7 @@ with st.expander("Fleet analytics · deployments, lifespans and survival since 1
                 line=dict(color=_th[_t], width=2),
                 hovertemplate="%{x|%Y-%m} · %{y:,} reporting<extra>" + _t + "</extra>"))
         _fig_a.update_layout(
-            height=330, margin=dict(l=10, r=10, t=30, b=10),
+            height=360, margin=dict(l=10, r=10, t=70, b=10),
             yaxis_title="floats", legend=dict(orientation="h", y=1.02,
                                               yanchor="bottom"))
         g1.markdown("**Reporting floats over time**")
@@ -1003,7 +1098,7 @@ with st.expander("Fleet analytics · deployments, lifespans and survival since 1
                 x=_dep.index, y=_dep[_t], name=_t, marker_color=_th[_t],
                 hovertemplate="%{x} · %{y:,} launched<extra>" + _t + "</extra>"))
         _fig_d.update_layout(
-            barmode="stack", height=330, margin=dict(l=10, r=10, t=30, b=10),
+            barmode="stack", height=360, margin=dict(l=10, r=10, t=70, b=10),
             yaxis_title="floats launched",
             legend=dict(orientation="h", y=1.02, yanchor="bottom"))
         g2.markdown("**Deployments per year**")
@@ -1043,7 +1138,7 @@ with st.expander("Fleet analytics · deployments, lifespans and survival since 1
                 hovertemplate="%{x:.2f} yr · %{y:.0%} still reporting<extra>"
                               + _mdl + "</extra>"))
         _fig_s.update_layout(
-            height=330, margin=dict(l=10, r=10, t=30, b=10),
+            height=360, margin=dict(l=10, r=10, t=70, b=10),
             xaxis_title="years since launch", yaxis_title="still reporting",
             yaxis_tickformat=".0%",
             legend=dict(orientation="h", y=1.02, yanchor="bottom"))
@@ -1167,12 +1262,15 @@ project_q = st.sidebar.selectbox(
     help="The program that owns the float, from its meta file: national programs "
          "(Argo Australia, J-ARGO), missions (SOCCOM, GO-BGC), and others. Type to "
          "search the list.")
-_pis = (["(any)"] + sorted(sensors["pi_name"].dropna().astype(str)
-                           .str.strip().replace("", np.nan).dropna().unique())
-        if "pi_name" in sensors.columns else ["(any)"])
+_pi_labels, _pi_groups = pi_directory(ROOT)
+if st.session_state.get("pi_q") not in (["(any)"] + _pi_labels):
+    st.session_state["pi_q"] = "(any)"
 pi_q = st.sidebar.selectbox(
-    "Principal investigator", _pis, key="pi_q",
-    help="The PI named in the float's meta file. Type to search the list.")
+    "Principal investigator", ["(any)"] + _pi_labels, key="pi_q",
+    help="One entry per person, sorted by surname: spelling variants, initials "
+         "and multi-PI teams are grouped by surname and first initial. Picking "
+         "a person matches every float that names them, alone or in a team. "
+         "Type to search.")
 _dacs = (["(any)"] + sorted(sensors["dac"].dropna().astype(str).unique())
          if "dac" in sensors.columns else ["(any)"])
 dac_q = st.sidebar.selectbox(
@@ -1327,7 +1425,8 @@ def search():
     if project_q != "(any)":
         df = df[df["project_name"].fillna("").astype(str).str.strip() == project_q]
     if pi_q != "(any)":
-        df = df[df["pi_name"].fillna("").astype(str).str.strip() == pi_q]
+        df = df[df["pi_name"].fillna("").astype(str).str.strip()
+                .isin(_pi_groups.get(pi_q, set()))]
     if dac_q != "(any)":
         df = df[df["dac"].fillna("").astype(str) == dac_q]
     if type_q != "(any)":
@@ -3052,7 +3151,7 @@ with tab_cmp:
                 hovertemplate="%{x} at %{y} dbar<extra>" + _cw + "</extra>"))
         if _fig_c.data:
             _fig_c.update_layout(
-                height=480, margin=dict(l=10, r=10, t=30, b=10),
+                height=500, margin=dict(l=10, r=10, t=70, b=10),
                 xaxis_title=param, yaxis_title="pressure (dbar)",
                 yaxis_autorange="reversed",
                 legend=dict(orientation="h", y=1.02, yanchor="bottom"))
