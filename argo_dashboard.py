@@ -1448,6 +1448,43 @@ def page_compare():
                    "full record · the page URL names this comparison, so it is "
                    "shareable. Floats from different regions or seasons will "
                    "differ for perfectly good reasons.")
+    # time series at a shared pressure horizon: same floats, same colors, the
+    # chosen parameter's evolution at one depth
+    st.markdown(f"**{_cparam} over time at a chosen pressure**")
+    _tsp = st.number_input(
+        "Pressure horizon (dbar)", min_value=0.0, max_value=6000.0,
+        value=100.0, step=50.0, key="cmp_ts_pres",
+        help="Each profile contributes its sample nearest this pressure (within "
+             "25 dbar or 10 percent, whichever is larger), so the floats are "
+             "compared at the same depth over time.")
+    _fig_ts = go.Figure()
+    for _i, (_w, _d, _typ) in enumerate(_loaded):
+        _df, _pc, _vc = param_long_frame(_d, _cparam, _cadj, _cqc)
+        if _df is None or _df.empty or "time" not in _df.columns:
+            continue
+        _df = _df.dropna(subset=["time"])
+        if not len(_df):
+            continue
+        _df = _df.assign(_dp=(_df["pres"] - _tsp).abs())
+        _near = (_df.sort_values("_dp").groupby("time", as_index=False).first())
+        _near = _near[_near["_dp"] <= max(25.0, 0.1 * _tsp)].sort_values("time")
+        if not len(_near):
+            _notes.append(f"{_w}: no samples near {_tsp:.0f} dbar")
+            continue
+        _fig_ts.add_trace(go.Scatter(
+            x=_near["time"], y=_near["value"], mode="lines+markers",
+            name=f"{_w} ({_typ})", marker=dict(size=4),
+            line=dict(color=_mh[_i % len(_mh)], width=2),
+            hovertemplate="%{x|%Y-%m-%d} · %{y}<extra>" + _w + "</extra>"))
+    if _fig_ts.data:
+        _fig_ts.update_layout(height=380, margin=dict(l=10, r=10, t=70, b=10),
+                              xaxis_title="date", yaxis_title=_cparam,
+                              legend=dict(orientation="h", y=1.02,
+                                          yanchor="bottom"))
+        st.plotly_chart(_fig_ts, width="stretch")
+        st.caption("One point per profile: the sample nearest the chosen pressure. "
+                   "Gaps mean the float skipped that depth or its values failed "
+                   "the selected data view.")
     for _n in _notes:
         st.info(_n)
     st.stop()
