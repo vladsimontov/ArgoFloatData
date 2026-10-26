@@ -1520,32 +1520,63 @@ def page_compare():
                               + f"{_wa} vs {_wb}" + "</extra>"))
             _pk += 1
     if _ts_traces and _dist_traces:
-        # one figure, two rows, one shared x-axis: zoom or pan either row and
-        # the other follows
-        _figc = make_subplots(
-            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
-            row_heights=[0.62, 0.38],
-            subplot_titles=(f"{_cparam} at {_tsp:.0f} dbar", "Distance apart"))
-        for _t in _ts_traces:
-            _figc.add_trace(_t, row=1, col=1)
-        for _t in _dist_traces:
-            if len(_dist_traces) == 1:
-                _t.update(showlegend=False)   # the subplot title names it
-            _figc.add_trace(_t, row=2, col=1)
-        _figc.update_yaxes(title_text=_cparam, row=1, col=1)
-        _figc.update_yaxes(title_text="separation (km)", rangemode="tozero",
-                           row=2, col=1)
-        _figc.update_xaxes(title_text="date", row=2, col=1)
-        _figc.update_layout(
-            height=680, margin=dict(l=10, r=10, t=50, b=70),
-            legend=dict(orientation="h", y=-0.12, yanchor="top"))
-        st.plotly_chart(_figc, width="stretch")
-        st.caption("Shared time axis: zooming either panel zooms both. Top: one "
-                   "point per profile, the sample nearest the chosen pressure "
-                   "(gaps mean the float skipped that depth or failed the data "
-                   "view). Bottom: great-circle distance between surfacing "
-                   "positions, each profile paired with the other float's "
-                   "nearest-in-time profile within 15 days; hover for miles.")
+        _overlay = st.toggle(
+            "Overlay distance on the measurand panel", value=False,
+            key="cmp_overlay_dist",
+            help="On: one panel, the measurand on the left axis and the floats' "
+                 "separation on the right axis (gray dashed). Off: two stacked "
+                 "panels with a shared time axis. The two scales are unrelated, "
+                 "so the overlay is off by default.")
+        if _overlay:
+            # single panel, separation on a clearly-labeled right axis
+            _figc = make_subplots(specs=[[{"secondary_y": True}]])
+            for _t in _ts_traces:
+                _figc.add_trace(_t, secondary_y=False)
+            for _t in _dist_traces:
+                _t.update(showlegend=True,
+                          name=(_t.name or "separation") + " · right axis")
+                _figc.add_trace(_t, secondary_y=True)
+            _figc.update_yaxes(title_text=_cparam, secondary_y=False)
+            _figc.update_yaxes(title_text="separation (km)", rangemode="tozero",
+                               showgrid=False, secondary_y=True)
+            _figc.update_xaxes(title_text="date")
+            _figc.update_layout(
+                height=520, margin=dict(l=10, r=10, t=50, b=70),
+                legend=dict(orientation="h", y=-0.18, yanchor="top"))
+            st.plotly_chart(_figc, width="stretch")
+            st.caption(f"{_cparam} at {_tsp:.0f} dbar on the left axis; the gray "
+                       "dashed line is the floats' separation on the right axis "
+                       "(km, hover for miles). The two scales are unrelated, so "
+                       "read each line against its own axis.")
+        else:
+            # one figure, two rows, one shared x-axis: zoom or pan either row
+            # and the other follows
+            _figc = make_subplots(
+                rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
+                row_heights=[0.62, 0.38],
+                subplot_titles=(f"{_cparam} at {_tsp:.0f} dbar",
+                                "Distance apart"))
+            for _t in _ts_traces:
+                _figc.add_trace(_t, row=1, col=1)
+            for _t in _dist_traces:
+                if len(_dist_traces) == 1:
+                    _t.update(showlegend=False)   # the subplot title names it
+                _figc.add_trace(_t, row=2, col=1)
+            _figc.update_yaxes(title_text=_cparam, row=1, col=1)
+            _figc.update_yaxes(title_text="separation (km)", rangemode="tozero",
+                               row=2, col=1)
+            _figc.update_xaxes(title_text="date", row=2, col=1)
+            _figc.update_layout(
+                height=680, margin=dict(l=10, r=10, t=50, b=70),
+                legend=dict(orientation="h", y=-0.12, yanchor="top"))
+            st.plotly_chart(_figc, width="stretch")
+            st.caption("Shared time axis: zooming either panel zooms both. Top: "
+                       "one point per profile, the sample nearest the chosen "
+                       "pressure (gaps mean the float skipped that depth or "
+                       "failed the data view). Bottom: great-circle distance "
+                       "between surfacing positions, each profile paired with "
+                       "the other float's nearest-in-time profile within 15 "
+                       "days; hover for miles.")
     elif _ts_traces:
         _fig_ts = go.Figure(data=_ts_traces)
         _fig_ts.update_layout(height=380, margin=dict(l=10, r=10, t=70, b=10),
