@@ -29,6 +29,7 @@ import xarray as xr
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+from plotly.subplots import make_subplots
 
 # Larger default chart fonts so axis titles, ticks, and legends stay readable.
 # Individual figures inherit this base unless they set their own size.
@@ -1448,16 +1449,17 @@ def page_compare():
                    "full record · the page URL names this comparison, so it is "
                    "shareable. Floats from different regions or seasons will "
                    "differ for perfectly good reasons.")
-    # time series at a shared pressure horizon: same floats, same colors, the
-    # chosen parameter's evolution at one depth
-    st.markdown(f"**{_cparam} over time at a chosen pressure**")
+    # over time: the parameter at a pressure horizon, with the floats' separation
+    # on a SHARED x-axis (stacked subplots), so zooming one zooms the other
+    st.markdown(f"**Over time · {_cparam} at a pressure horizon, with distance "
+                "apart**")
     _tsp = st.number_input(
         "Pressure horizon (dbar)", min_value=0.0, max_value=6000.0,
         value=100.0, step=50.0, key="cmp_ts_pres",
         help="Each profile contributes its sample nearest this pressure (within "
              "25 dbar or 10 percent, whichever is larger), so the floats are "
              "compared at the same depth over time.")
-    _fig_ts = go.Figure()
+    _ts_traces = []
     for _i, (_w, _d, _typ) in enumerate(_loaded):
         _df, _pc, _vc = param_long_frame(_d, _cparam, _cadj, _cqc)
         if _df is None or _df.empty or "time" not in _df.columns:
@@ -1471,24 +1473,11 @@ def page_compare():
         if not len(_near):
             _notes.append(f"{_w}: no samples near {_tsp:.0f} dbar")
             continue
-        _fig_ts.add_trace(go.Scatter(
+        _ts_traces.append(go.Scatter(
             x=_near["time"], y=_near["value"], mode="lines+markers",
             name=f"{_w} ({_typ})", marker=dict(size=4),
             line=dict(color=_mh[_i % len(_mh)], width=2),
             hovertemplate="%{x|%Y-%m-%d} · %{y}<extra>" + _w + "</extra>"))
-    if _fig_ts.data:
-        _fig_ts.update_layout(height=380, margin=dict(l=10, r=10, t=70, b=10),
-                              xaxis_title="date", yaxis_title=_cparam,
-                              legend=dict(orientation="h", y=1.02,
-                                          yanchor="bottom"))
-        st.plotly_chart(_fig_ts, width="stretch")
-        st.caption("One point per profile: the sample nearest the chosen pressure. "
-                   "Gaps mean the float skipped that depth or its values failed "
-                   "the selected data view.")
-    # separation over time: each profile paired with the other float's
-    # nearest-in-time profile. Dash styles, not colors, identify the pairs, so
-    # the float colors above keep their meaning.
-    st.markdown("**Distance apart over time**")
 
     def _positions(ds_x):
         if not all(k in ds_x for k in ("LATITUDE", "LONGITUDE", "JULD")):
@@ -1501,7 +1490,7 @@ def page_compare():
         return _p if len(_p) else None
 
     _pos = {_w: _positions(_d) for _w, _d, _t in _loaded}
-    _fig_dist = go.Figure()
+    _dist_traces = []
     _dashes = ["solid", "dash", "dot"]
     _pk = 0
     for _i in range(len(_loaded)):
@@ -1521,7 +1510,7 @@ def page_compare():
                                _mm["lon_a"].to_numpy("float64"),
                                _mm["lat_b"].to_numpy("float64"),
                                _mm["lon_b"].to_numpy("float64"))
-            _fig_dist.add_trace(go.Scatter(
+            _dist_traces.append(go.Scatter(
                 x=_mm["time"], y=_km, mode="lines", name=f"{_wa} vs {_wb}",
                 line=dict(color="#808A95", width=2,
                           dash=_dashes[_pk % len(_dashes)]),
@@ -1530,12 +1519,50 @@ def page_compare():
                               "(%{customdata:,.0f} mi) apart<extra>"
                               + f"{_wa} vs {_wb}" + "</extra>"))
             _pk += 1
-    if _fig_dist.data:
+    if _ts_traces and _dist_traces:
+        # one figure, two rows, one shared x-axis: zoom or pan either row and
+        # the other follows
+        _figc = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
+            row_heights=[0.62, 0.38],
+            subplot_titles=(f"{_cparam} at {_tsp:.0f} dbar", "Distance apart"))
+        for _t in _ts_traces:
+            _figc.add_trace(_t, row=1, col=1)
+        for _t in _dist_traces:
+            if len(_dist_traces) == 1:
+                _t.update(showlegend=False)   # the subplot title names it
+            _figc.add_trace(_t, row=2, col=1)
+        _figc.update_yaxes(title_text=_cparam, row=1, col=1)
+        _figc.update_yaxes(title_text="separation (km)", rangemode="tozero",
+                           row=2, col=1)
+        _figc.update_xaxes(title_text="date", row=2, col=1)
+        _figc.update_layout(
+            height=680, margin=dict(l=10, r=10, t=50, b=70),
+            legend=dict(orientation="h", y=-0.12, yanchor="top"))
+        st.plotly_chart(_figc, width="stretch")
+        st.caption("Shared time axis: zooming either panel zooms both. Top: one "
+                   "point per profile, the sample nearest the chosen pressure "
+                   "(gaps mean the float skipped that depth or failed the data "
+                   "view). Bottom: great-circle distance between surfacing "
+                   "positions, each profile paired with the other float's "
+                   "nearest-in-time profile within 15 days; hover for miles.")
+    elif _ts_traces:
+        _fig_ts = go.Figure(data=_ts_traces)
+        _fig_ts.update_layout(height=380, margin=dict(l=10, r=10, t=70, b=10),
+                              xaxis_title="date", yaxis_title=_cparam,
+                              legend=dict(orientation="h", y=1.02,
+                                          yanchor="bottom"))
+        st.plotly_chart(_fig_ts, width="stretch")
+        st.caption("One point per profile: the sample nearest the chosen "
+                   "pressure. Gaps mean the float skipped that depth or its "
+                   "values failed the selected data view.")
+    elif _dist_traces:
+        _fig_dist = go.Figure(data=_dist_traces)
         _fig_dist.update_layout(
             height=320, margin=dict(l=10, r=10, t=70, b=10),
             xaxis_title="date", yaxis_title="separation (km)",
             yaxis_rangemode="tozero",
-            showlegend=len(_fig_dist.data) > 1,
+            showlegend=len(_dist_traces) > 1,
             legend=dict(orientation="h", y=1.02, yanchor="bottom"))
         st.plotly_chart(_fig_dist, width="stretch")
         st.caption("Great-circle distance between surfacing positions, pairing "
