@@ -944,6 +944,7 @@ if "_dl_seen" not in st.session_state:
         if _ws:
             st.session_state["watchlist"] = _ws
 st.session_state.setdefault("watchlist", [])
+st.session_state.setdefault("cmp_list", [])
 
 
 def _open_float(wmo):
@@ -969,6 +970,24 @@ def _toggle_watch(wmo):
     else:
         wl.append(wmo)
     _sync_watch_param()
+
+
+def _add_to_compare(wmo):
+    # a cart, not a redirect: the nav item's count ticks up and the user goes to
+    # the Compare page when ready. Plain session key, NOT the page's widget key,
+    # because Streamlit drops widget state while the widget's page is not rendered.
+    cl = st.session_state.setdefault("cmp_list", [])
+    wmo = str(wmo)
+    if wmo in cl:
+        st.toast(f"Float {wmo} is already on the compare list "
+                 f"({len(cl)} of 3).", icon="⚖️")
+    elif len(cl) >= 3:
+        st.toast("The compare list is full (3 floats). Edit it on the "
+                 "Compare page.", icon="⚖️")
+    else:
+        cl.append(wmo)
+        st.toast(f"Added float {wmo} to the compare list "
+                 f"({len(cl)} of 3).", icon="⚖️")
 
 
 _ACK_MD = """
@@ -1257,11 +1276,21 @@ def page_compare():
         st.session_state["_cmp_dl_seen"] = True
         _dlw = str(st.query_params.get("wmos") or "").strip()
         if _dlw:
-            st.session_state["cmp_page_wmos"] = ", ".join(
-                w for w in _dlw.split(".") if w.isdigit())
+            _dl_list = [w for w in _dlw.split(".") if w.isdigit()][:3]
+            if _dl_list:
+                st.session_state["cmp_list"] = _dl_list
         _dlv = str(st.query_params.get("var") or "").strip().upper()
         if _dlv:
             st.session_state["_cmp_dl_var"] = _dlv
+    # the compare list (filled by 'Add to Compare List' buttons, deep links, or
+    # typing here) drives the text box; edits to the box flow back into the list.
+    # The box's own widget state is dropped whenever another page renders, so the
+    # plain cmp_list key is the durable store and the box reseeds from it.
+    _cl = st.session_state.get("cmp_list", [])
+    if (st.session_state.get("_cmp_sync") != tuple(_cl)
+            or ("cmp_page_wmos" not in st.session_state and _cl)):
+        st.session_state["_cmp_sync"] = tuple(_cl)
+        st.session_state["cmp_page_wmos"] = ", ".join(_cl)
     _in = st.text_input(
         "Floats to compare (two or three WMOs, comma separated)",
         key="cmp_page_wmos", placeholder="e.g. 6903132, 1902304",
@@ -1269,10 +1298,12 @@ def page_compare():
              "cached, so the first load of a new float downloads its file "
              "(often ~10 MB).")
     _wmos_in = [w for w in _in.replace(",", " ").split() if w][:3]
+    st.session_state["cmp_list"] = _wmos_in
+    st.session_state["_cmp_sync"] = tuple(_wmos_in)
     if len(_wmos_in) < 2:
         st.info("Name at least two floats to compare. Tip: the float view on the "
-                "Explore page has a 'Compare with another float' button that "
-                "starts this list for you.")
+                "Explore page has an 'Add to Compare List' button that collects "
+                "floats here as you browse.")
         st.stop()
     _loaded, _notes = [], []
     for _w in _wmos_in:
@@ -1363,8 +1394,11 @@ def page_compare():
 
 _PG_ABOUT = st.Page(page_about, title="About & data API", icon="ℹ️",
                     url_path="about")
-_PG_COMPARE = st.Page(page_compare, title="Compare floats", icon="⚖️",
-                      url_path="compare")
+_cmp_n = len(st.session_state.get("cmp_list", []))
+_PG_COMPARE = st.Page(page_compare,
+                      title=(f"Compare floats ({_cmp_n})" if _cmp_n
+                             else "Compare floats"),
+                      icon="⚖️", url_path="compare")
 st.navigation([_PG_EXPLORE, _PG_COMPARE, _PG_FLEET, _PG_ABOUT]).run()
 
 # ---------------- Explore (default page) ----------------
@@ -1979,12 +2013,11 @@ _lc2.button("★ Watching · remove" if _watching else "☆ Watch this float",
             width="stretch",
             help="Watched floats appear in the sidebar with a status light. The "
                  "list rides in the page URL, so a bookmark keeps it.")
-if _lc3.button("⚖️ Compare with another float", key="goto_cmp", width="stretch",
-               help="Opens the Compare page with this float already filled in; "
-                    "add the WMO(s) to compare against there."):
-    st.session_state["cmp_page_wmos"] = str(sel_wmo)
-    st.session_state["_cmp_dl_seen"] = True   # a fresh start, not an old link
-    st.switch_page(_PG_COMPARE)
+_lc3.button("⚖️ Add to Compare List", key="goto_cmp", width="stretch",
+            on_click=_add_to_compare, args=(str(sel_wmo),),
+            help="Collects up to 3 floats; the Compare floats page in the sidebar "
+                 "shows how many are on the list and plots them side by side "
+                 "when you open it.")
 
 # ---- resolve the selected float and load its data ----
 frow = floats[floats["wmo"].astype(str) == str(sel_wmo)]
