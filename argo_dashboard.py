@@ -917,9 +917,6 @@ def mann_kendall_sen(t_years, y):
 sensors, floats = load_tables(ROOT)
 mani = read_manifest(ROOT)
 
-st.title("Argo Float Data Explorer")
-st.caption("BGC, Core & Deep Argo float profiles.  Find floats near a location, map "
-           "the live array, or search by sensor serial number, model, type or WMO.")
 if sensors is None:
     st.error(
         f"No index found in `{ROOT}`.\n\n"
@@ -974,205 +971,7 @@ def _toggle_watch(wmo):
     _sync_watch_param()
 
 
-# freshness banner: counts across the WHOLE index (not just locally-cached data)
-kind = floats["data_kind"] if "data_kind" in floats else pd.Series(dtype=object)
-n_bgc = int((kind == "bgc").sum())
-n_core = int((kind == "core").sum())
-n_deep = int(floats["is_deep"].sum()) if "is_deep" in floats else 0
-n_sbe61 = (sensors.loc[sensors["sensor_model"].fillna("").str.contains("SBE61"),
-                       "wmo"].astype(str).nunique()
-           if "sensor_model" in sensors else 0)
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Floats indexed", f"{floats['wmo'].nunique():,}",
-          help="Every float searchable in this tool.")
-c2.metric("BGC floats", f"{n_bgc:,}", help="Carry biogeochemical sensors (Sprof).")
-c3.metric("Core floats", f"{n_core:,}", help="Physical T/S floats (prof.nc).")
-c4.metric("Deep floats", f"{n_deep:,}",
-          help=f"PLATFORM_FAMILY = FLOAT_DEEP · {n_sbe61:,} with SBE61 (6000 m).")
-c5.metric("Last synced (UTC)", mani.get("synced_utc", "-"),
-          help="When the metadata index was last refreshed.")
-
-# this week's churn: who joined the array, who went quiet, and the net direction,
-# broken down by float type (BGC / Core, deep floats labeled '· Deep')
-_new_df, _silent_df = weekly_churn(
-    ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
-_net = len(_new_df) - len(_silent_df)
-
-
-def _by_type(df):
-    """'8 Core, 3 BGC, 1 Core · Deep', largest group first."""
-    return (", ".join(f"{int(n)} {t}" for t, n in df["type"].value_counts().items())
-            if len(df) else "none")
-
-
-w1, w2, w3 = st.columns(3)
-w1.metric("New floats (7 days)", f"{len(_new_df):,}",
-          help="Floats whose launch date (from their meta file) falls within the "
-               "last 7 days. A float joins the index once it starts reporting.")
-w1.caption(_by_type(_new_df))
-w2.metric("Fell silent (7 days)", f"{len(_silent_df):,}",
-          help=f"Floats whose last report crossed the {ACTIVE_DAYS}-day inactivity "
-               "line within the last 7 days. Argo floats surface about every 10 "
-               "days, so a longer gap almost always means the float has stopped.")
-w2.caption(_by_type(_silent_df))
-w3.metric("Weekly trend",
-          "growing" if _net > 0 else "shrinking" if _net < 0 else "steady",
-          delta=(f"{_net:+d} floats" if _net else None),
-          help="New floats minus newly-silent floats over the last 7 days: the net "
-               "change in the actively reporting array.")
-_net_by_type = (_new_df["type"].value_counts()
-                .sub(_silent_df["type"].value_counts(), fill_value=0).astype(int))
-_net_by_type = _net_by_type[_net_by_type != 0].sort_values()
-if len(_net_by_type):
-    w3.caption(", ".join(f"{t} {int(v):+d}" for t, v in _net_by_type.items()))
-if len(_new_df) or len(_silent_df):
-    with st.expander("This week's additions and losses (WMOs)", expanded=False):
-
-        def _grouped(df):
-            if not len(df):
-                return "none"
-            lines = []
-            for t, grp in df.groupby("type", sort=True):
-                ws = grp["wmo"].tolist()
-                lines.append(f"**{t}** ({len(ws)}): " + ", ".join(ws[:30])
-                             + (" …" if len(ws) > 30 else ""))
-            return "  \n".join(lines)
-
-        e1, e2 = st.columns(2)
-        e1.markdown("**New**  \n" + _grouped(_new_df))
-        e2.markdown("**Fell silent**  \n" + _grouped(_silent_df))
-
-# ---- fleet analytics: the whole array's history, reconstructed from the index ----
-with st.expander("Fleet analytics · deployments, lifespans and survival since 1999",
-                 expanded=False):
-    _fh = fleet_history(ROOT, pd.Timestamp.now().normalize().isoformat())
-    if not len(_fh):
-        st.info("The index has no launch/last dates to chart.")
-    else:
-        _now_ts = pd.Timestamp.now().normalize()
-        _th, _mh = _chart_colors()
-        _ftypes = [t for t in TYPE_COLORS if (_fh["type"] == t).any()]
-        _done = _fh[(_now_ts - _fh["last"]).dt.days > ACTIVE_DAYS]
-        _life_yrs = ((_done["last"] - _done["launch"]).dt.days / 365.25).clip(lower=0)
-        _dep_year = _fh["launch"].dt.year
-        a1, a2, a3 = st.columns(3)
-        a1.metric("Reporting now", f"{(len(_fh) - len(_done)):,}",
-                  help=f"Floats whose last profile is within {ACTIVE_DAYS} days.")
-        a2.metric("Median completed lifespan", f"{_life_yrs.median():.1f} yr",
-                  help="Across floats that have stopped reporting: launch to last "
-                       "profile. Active floats are not counted, so this is not "
-                       "biased by floats still going strong.")
-        a3.metric("Busiest deployment year",
-                  str(int(_dep_year.value_counts().idxmax())),
-                  help="The calendar year with the most float launches.")
-
-        g1, g2 = st.columns(2)
-        # 1) active floats over time, one line per type
-        _months = pd.date_range("1999-01-01", _now_ts, freq="MS")
-        _mv = _months.values.astype("datetime64[ns]")
-        _fig_a = go.Figure()
-        for _t in _ftypes:
-            _sub = _fh[_fh["type"] == _t]
-            _ls = np.sort(_sub["launch"].values.astype("datetime64[ns]"))
-            _le = np.sort(_sub["last"].values.astype("datetime64[ns]"))
-            _n = (np.searchsorted(_ls, _mv, side="right")
-                  - np.searchsorted(_le, _mv, side="left"))
-            _fig_a.add_trace(go.Scatter(
-                x=_months, y=_n, name=_t, mode="lines",
-                line=dict(color=_th[_t], width=2),
-                hovertemplate="%{x|%Y-%m} · %{y:,} reporting<extra>" + _t + "</extra>"))
-        _fig_a.update_layout(
-            height=360, margin=dict(l=10, r=10, t=70, b=10),
-            yaxis_title="floats", legend=dict(orientation="h", y=1.02,
-                                              yanchor="bottom"))
-        g1.markdown("**Reporting floats over time**")
-        g1.plotly_chart(_fig_a, width="stretch")
-        # 2) deployments per year, stacked by type
-        _dep = (_fh.assign(year=_dep_year).groupby(["year", "type"]).size()
-                .unstack(fill_value=0))
-        _dep = _dep.loc[(_dep.index >= 1998) & (_dep.index <= _now_ts.year),
-                        [t for t in _ftypes if t in _dep.columns]]
-        _fig_d = go.Figure()
-        for _t in _dep.columns:
-            _fig_d.add_trace(go.Bar(
-                x=_dep.index, y=_dep[_t], name=_t, marker_color=_th[_t],
-                hovertemplate="%{x} · %{y:,} launched<extra>" + _t + "</extra>"))
-        _fig_d.update_layout(
-            barmode="stack", height=360, margin=dict(l=10, r=10, t=70, b=10),
-            yaxis_title="floats launched",
-            legend=dict(orientation="h", y=1.02, yanchor="bottom"))
-        g2.markdown("**Deployments per year**")
-        g2.plotly_chart(_fig_d, width="stretch")
-
-        g3, g4 = st.columns(2)
-        # 3) lifespan distribution (completed floats only; the title names the
-        #    single series, so no legend)
-        _fig_l = go.Figure(go.Histogram(
-            x=_life_yrs, xbins=dict(start=0, end=12, size=0.5),
-            marker_color=_th["Core"],
-            hovertemplate="%{x} yr · %{y:,} floats<extra></extra>"))
-        _fig_l.update_layout(
-            height=330, margin=dict(l=10, r=10, t=30, b=10),
-            xaxis_title="years", yaxis_title="floats")
-        g3.markdown("**Completed lifespans (launch to last profile)**")
-        g3.plotly_chart(_fig_l, width="stretch")
-        # 4) survival by platform model: among floats launched at least t years
-        #    ago, the fraction that were still reporting t years after launch
-        _top_models = _fh["platform"].replace("?", np.nan).dropna() \
-                                     .value_counts().head(4).index.tolist()
-        _tgrid = np.arange(0, 10.01, 0.25)
-        _fig_s = go.Figure()
-        for _mdl, _mc in zip(_top_models, _mh):
-            _sub = _fh[_fh["platform"] == _mdl]
-            _lifed = (_sub["last"] - _sub["launch"]).dt.days.to_numpy("float64")
-            _aged = (_now_ts - _sub["launch"]).dt.days.to_numpy("float64")
-            _fr = []
-            for _ty in _tgrid:
-                _td = _ty * 365.25
-                _coh = _aged >= _td
-                _fr.append(float((_lifed[_coh] >= _td).mean())
-                           if _coh.sum() >= 50 else np.nan)
-            _fig_s.add_trace(go.Scatter(
-                x=_tgrid, y=_fr, name=_mdl, mode="lines",
-                line=dict(color=_mc, width=2),
-                hovertemplate="%{x:.2f} yr · %{y:.0%} still reporting<extra>"
-                              + _mdl + "</extra>"))
-        _fig_s.update_layout(
-            height=360, margin=dict(l=10, r=10, t=70, b=10),
-            xaxis_title="years since launch", yaxis_title="still reporting",
-            yaxis_tickformat=".0%",
-            legend=dict(orientation="h", y=1.02, yanchor="bottom"))
-        g4.markdown("**Survival by platform model (top 4)**")
-        g4.plotly_chart(_fig_s, width="stretch")
-        st.caption(
-            "All four charts come from the metadata index alone (launch date, last "
-            "profile date, type, platform model), refreshed daily. A float counts "
-            "as reporting between its launch and its last profile. Survival curves "
-            "stop where a cohort drops below 50 floats.")
-        if st.checkbox("Show the numbers as tables", value=False,
-                       help="The same data as the charts, for reading exact values "
-                            "or copying out."):
-            t1, t2 = st.columns(2)
-            t1.markdown("**Deployments per year**")
-            t1.dataframe(_dep, width="stretch", height=240)
-            _active_tbl = pd.DataFrame(
-                {_t: (np.searchsorted(np.sort(_fh.loc[_fh["type"] == _t, "launch"]
-                                              .values.astype("datetime64[ns]")),
-                                      _mv, side="right")
-                      - np.searchsorted(np.sort(_fh.loc[_fh["type"] == _t, "last"]
-                                                .values.astype("datetime64[ns]")),
-                                        _mv, side="left"))
-                 for _t in _ftypes}, index=_months.strftime("%Y-%m"))
-            t2.markdown("**Reporting floats by month**")
-            t2.dataframe(_active_tbl.iloc[::-1], width="stretch", height=240)
-
-st.caption("Float data is fetched on demand from the Argo GDAC when you open a float"
-           " · the GDAC is mutable (delayed-mode QC rewrites history), so the index "
-           "is refreshed periodically; pin a DOI snapshot for publications.")
-
-# ---- acknowledgements · data source · license (always visible) ----
-with st.expander("Acknowledgements | Data Source | License", expanded=False):
-    st.markdown("""
+_ACK_MD = """
 **Thank you to Argo, and to the people and nations who make it possible.**
 
 Every profile in this tool exists because of the **International Argo Program** and
@@ -1205,11 +1004,251 @@ apparent oxygen utilization, absolute/conservative properties, trends) that are
 
 *Built with the help of [Claude](https://claude.ai) (Anthropic). An independent,
 community tool, not affiliated with or endorsed by the Argo Program.*
-""")
+"""
+
+
+# ---- pages: Explore is the fall-through body below pg.run(); the other pages
+# render and stop, so the big explore flow stays unindented at module level ----
+def page_explore():
+    pass          # body = everything after st.navigation(...).run()
+
+
+def page_fleet():
+    st.title("Fleet overview")
+    st.caption("The whole array at a glance: today\'s counts, this week\'s churn, "
+               "and the array\'s history, all from the daily-refreshed metadata index.")
+    # freshness banner: counts across the WHOLE index (not just locally-cached data)
+    kind = floats["data_kind"] if "data_kind" in floats else pd.Series(dtype=object)
+    n_bgc = int((kind == "bgc").sum())
+    n_core = int((kind == "core").sum())
+    n_deep = int(floats["is_deep"].sum()) if "is_deep" in floats else 0
+    n_sbe61 = (sensors.loc[sensors["sensor_model"].fillna("").str.contains("SBE61"),
+                           "wmo"].astype(str).nunique()
+               if "sensor_model" in sensors else 0)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Floats indexed", f"{floats['wmo'].nunique():,}",
+              help="Every float searchable in this tool.")
+    c2.metric("BGC floats", f"{n_bgc:,}", help="Carry biogeochemical sensors (Sprof).")
+    c3.metric("Core floats", f"{n_core:,}", help="Physical T/S floats (prof.nc).")
+    c4.metric("Deep floats", f"{n_deep:,}",
+              help=f"PLATFORM_FAMILY = FLOAT_DEEP · {n_sbe61:,} with SBE61 (6000 m).")
+    c5.metric("Last synced (UTC)", mani.get("synced_utc", "-"),
+              help="When the metadata index was last refreshed.")
+
+    # this week's churn: who joined the array, who went quiet, and the net direction,
+    # broken down by float type (BGC / Core, deep floats labeled '· Deep')
+    _new_df, _silent_df = weekly_churn(
+        ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
+    _net = len(_new_df) - len(_silent_df)
+
+
+    def _by_type(df):
+        """'8 Core, 3 BGC, 1 Core · Deep', largest group first."""
+        return (", ".join(f"{int(n)} {t}" for t, n in df["type"].value_counts().items())
+                if len(df) else "none")
+
+
+    w1, w2, w3 = st.columns(3)
+    w1.metric("New floats (7 days)", f"{len(_new_df):,}",
+              help="Floats whose launch date (from their meta file) falls within the "
+                   "last 7 days. A float joins the index once it starts reporting.")
+    w1.caption(_by_type(_new_df))
+    w2.metric("Fell silent (7 days)", f"{len(_silent_df):,}",
+              help=f"Floats whose last report crossed the {ACTIVE_DAYS}-day inactivity "
+                   "line within the last 7 days. Argo floats surface about every 10 "
+                   "days, so a longer gap almost always means the float has stopped.")
+    w2.caption(_by_type(_silent_df))
+    w3.metric("Weekly trend",
+              "growing" if _net > 0 else "shrinking" if _net < 0 else "steady",
+              delta=(f"{_net:+d} floats" if _net else None),
+              help="New floats minus newly-silent floats over the last 7 days: the net "
+                   "change in the actively reporting array.")
+    _net_by_type = (_new_df["type"].value_counts()
+                    .sub(_silent_df["type"].value_counts(), fill_value=0).astype(int))
+    _net_by_type = _net_by_type[_net_by_type != 0].sort_values()
+    if len(_net_by_type):
+        w3.caption(", ".join(f"{t} {int(v):+d}" for t, v in _net_by_type.items()))
+    if len(_new_df) or len(_silent_df):
+        with st.expander("This week's additions and losses (WMOs)", expanded=False):
+
+            def _grouped(df):
+                if not len(df):
+                    return "none"
+                lines = []
+                for t, grp in df.groupby("type", sort=True):
+                    ws = grp["wmo"].tolist()
+                    lines.append(f"**{t}** ({len(ws)}): " + ", ".join(ws[:30])
+                                 + (" …" if len(ws) > 30 else ""))
+                return "  \n".join(lines)
+
+            e1, e2 = st.columns(2)
+            e1.markdown("**New**  \n" + _grouped(_new_df))
+            e2.markdown("**Fell silent**  \n" + _grouped(_silent_df))
+
+    # ---- fleet analytics: the whole array's history, reconstructed from the index ----
+    with st.expander("Fleet analytics · deployments, lifespans and survival since 1999",
+                     expanded=False):
+        _fh = fleet_history(ROOT, pd.Timestamp.now().normalize().isoformat())
+        if not len(_fh):
+            st.info("The index has no launch/last dates to chart.")
+        else:
+            _now_ts = pd.Timestamp.now().normalize()
+            _th, _mh = _chart_colors()
+            _ftypes = [t for t in TYPE_COLORS if (_fh["type"] == t).any()]
+            _done = _fh[(_now_ts - _fh["last"]).dt.days > ACTIVE_DAYS]
+            _life_yrs = ((_done["last"] - _done["launch"]).dt.days / 365.25).clip(lower=0)
+            _dep_year = _fh["launch"].dt.year
+            a1, a2, a3 = st.columns(3)
+            a1.metric("Reporting now", f"{(len(_fh) - len(_done)):,}",
+                      help=f"Floats whose last profile is within {ACTIVE_DAYS} days.")
+            a2.metric("Median completed lifespan", f"{_life_yrs.median():.1f} yr",
+                      help="Across floats that have stopped reporting: launch to last "
+                           "profile. Active floats are not counted, so this is not "
+                           "biased by floats still going strong.")
+            a3.metric("Busiest deployment year",
+                      str(int(_dep_year.value_counts().idxmax())),
+                      help="The calendar year with the most float launches.")
+
+            g1, g2 = st.columns(2)
+            # 1) active floats over time, one line per type
+            _months = pd.date_range("1999-01-01", _now_ts, freq="MS")
+            _mv = _months.values.astype("datetime64[ns]")
+            _fig_a = go.Figure()
+            for _t in _ftypes:
+                _sub = _fh[_fh["type"] == _t]
+                _ls = np.sort(_sub["launch"].values.astype("datetime64[ns]"))
+                _le = np.sort(_sub["last"].values.astype("datetime64[ns]"))
+                _n = (np.searchsorted(_ls, _mv, side="right")
+                      - np.searchsorted(_le, _mv, side="left"))
+                _fig_a.add_trace(go.Scatter(
+                    x=_months, y=_n, name=_t, mode="lines",
+                    line=dict(color=_th[_t], width=2),
+                    hovertemplate="%{x|%Y-%m} · %{y:,} reporting<extra>" + _t + "</extra>"))
+            _fig_a.update_layout(
+                height=360, margin=dict(l=10, r=10, t=70, b=10),
+                yaxis_title="floats", legend=dict(orientation="h", y=1.02,
+                                                  yanchor="bottom"))
+            g1.markdown("**Reporting floats over time**")
+            g1.plotly_chart(_fig_a, width="stretch")
+            # 2) deployments per year, stacked by type
+            _dep = (_fh.assign(year=_dep_year).groupby(["year", "type"]).size()
+                    .unstack(fill_value=0))
+            _dep = _dep.loc[(_dep.index >= 1998) & (_dep.index <= _now_ts.year),
+                            [t for t in _ftypes if t in _dep.columns]]
+            _fig_d = go.Figure()
+            for _t in _dep.columns:
+                _fig_d.add_trace(go.Bar(
+                    x=_dep.index, y=_dep[_t], name=_t, marker_color=_th[_t],
+                    hovertemplate="%{x} · %{y:,} launched<extra>" + _t + "</extra>"))
+            _fig_d.update_layout(
+                barmode="stack", height=360, margin=dict(l=10, r=10, t=70, b=10),
+                yaxis_title="floats launched",
+                legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+            g2.markdown("**Deployments per year**")
+            g2.plotly_chart(_fig_d, width="stretch")
+
+            g3, g4 = st.columns(2)
+            # 3) lifespan distribution (completed floats only; the title names the
+            #    single series, so no legend)
+            _fig_l = go.Figure(go.Histogram(
+                x=_life_yrs, xbins=dict(start=0, end=12, size=0.5),
+                marker_color=_th["Core"],
+                hovertemplate="%{x} yr · %{y:,} floats<extra></extra>"))
+            _fig_l.update_layout(
+                height=330, margin=dict(l=10, r=10, t=30, b=10),
+                xaxis_title="years", yaxis_title="floats")
+            g3.markdown("**Completed lifespans (launch to last profile)**")
+            g3.plotly_chart(_fig_l, width="stretch")
+            # 4) survival by platform model: among floats launched at least t years
+            #    ago, the fraction that were still reporting t years after launch
+            _top_models = _fh["platform"].replace("?", np.nan).dropna() \
+                                         .value_counts().head(4).index.tolist()
+            _tgrid = np.arange(0, 10.01, 0.25)
+            _fig_s = go.Figure()
+            for _mdl, _mc in zip(_top_models, _mh):
+                _sub = _fh[_fh["platform"] == _mdl]
+                _lifed = (_sub["last"] - _sub["launch"]).dt.days.to_numpy("float64")
+                _aged = (_now_ts - _sub["launch"]).dt.days.to_numpy("float64")
+                _fr = []
+                for _ty in _tgrid:
+                    _td = _ty * 365.25
+                    _coh = _aged >= _td
+                    _fr.append(float((_lifed[_coh] >= _td).mean())
+                               if _coh.sum() >= 50 else np.nan)
+                _fig_s.add_trace(go.Scatter(
+                    x=_tgrid, y=_fr, name=_mdl, mode="lines",
+                    line=dict(color=_mc, width=2),
+                    hovertemplate="%{x:.2f} yr · %{y:.0%} still reporting<extra>"
+                                  + _mdl + "</extra>"))
+            _fig_s.update_layout(
+                height=360, margin=dict(l=10, r=10, t=70, b=10),
+                xaxis_title="years since launch", yaxis_title="still reporting",
+                yaxis_tickformat=".0%",
+                legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+            g4.markdown("**Survival by platform model (top 4)**")
+            g4.plotly_chart(_fig_s, width="stretch")
+            st.caption(
+                "All four charts come from the metadata index alone (launch date, last "
+                "profile date, type, platform model), refreshed daily. A float counts "
+                "as reporting between its launch and its last profile. Survival curves "
+                "stop where a cohort drops below 50 floats.")
+            if st.checkbox("Show the numbers as tables", value=False,
+                           help="The same data as the charts, for reading exact values "
+                                "or copying out."):
+                t1, t2 = st.columns(2)
+                t1.markdown("**Deployments per year**")
+                t1.dataframe(_dep, width="stretch", height=240)
+                _active_tbl = pd.DataFrame(
+                    {_t: (np.searchsorted(np.sort(_fh.loc[_fh["type"] == _t, "launch"]
+                                                  .values.astype("datetime64[ns]")),
+                                          _mv, side="right")
+                          - np.searchsorted(np.sort(_fh.loc[_fh["type"] == _t, "last"]
+                                                    .values.astype("datetime64[ns]")),
+                                            _mv, side="left"))
+                     for _t in _ftypes}, index=_months.strftime("%Y-%m"))
+                t2.markdown("**Reporting floats by month**")
+                t2.dataframe(_active_tbl.iloc[::-1], width="stretch", height=240)
+    st.stop()
+
+
+def page_about():
+    st.title("About this tool and the data")
+    st.markdown(_ACK_MD)
     st.markdown(
         f"**🐛 Found a bug, or have a request?** "
         f"[Open an issue]({NEW_ISSUE_URL}) · [browse issues]({ISSUES_URL}). "
         "All Feedback and Feature requests are welcome.")
+    st.subheader("Data API")
+    st.markdown(
+        "Everything this tool knows is also a free **HTTP data API**: the full "
+        "float and sensor index as Parquet/JSON, queryable with DuckDB or pandas, "
+        "no key needed, refreshed daily. "
+        "[Documentation and examples](https://vladsimontov.github.io/ArgoFloatData/api.html).")
+    st.stop()
+
+
+_PG_EXPLORE = st.Page(page_explore, title="Explore floats", icon="🌍",
+                      default=True)
+_PG_FLEET = st.Page(page_fleet, title="Fleet overview", icon="📊",
+                    url_path="fleet")
+_PG_ABOUT = st.Page(page_about, title="About & data API", icon="ℹ️",
+                    url_path="about")
+st.navigation([_PG_EXPLORE, _PG_FLEET, _PG_ABOUT]).run()
+
+# ---------------- Explore (default page) ----------------
+st.title("Argo Float Data Explorer")
+st.caption("BGC, Core & Deep Argo float profiles.  Find floats near a location, map "
+           "the live array, or search by sensor serial number, model, type or WMO.")
+_nw, _sw = weekly_churn(ROOT, ACTIVE_DAYS,
+                        pd.Timestamp.now().normalize().isoformat())
+st.page_link(_PG_FLEET, icon="📊",
+             label=f"This week: {len(_nw)} new float(s), {len(_sw)} fell "
+                   "silent. Charts and history live in the Fleet overview.")
+
+st.caption("Float data is fetched on demand from the Argo GDAC when you open a float"
+           " · the GDAC is mutable (delayed-mode QC rewrites history), so the index "
+           "is refreshed periodically; pin a DOI snapshot for publications.")
+
 
 # ---- sidebar: search ----
 # compact float-type label per WMO (BGC / Core, flagged Deep); drives both the
@@ -1547,214 +1586,227 @@ if True:   # there is always something to show: a lookup, or the browse view
     if serial_hit:
         show.insert(6 if (browsing and near_mode) else 5, "matched_on",
                     show.pop("matched_on"))
-    # The map always shows whatever is currently matched: every active float on open,
-    # a narrower set as filters go on, a single float for a lookup. It used to be
-    # suppressed for lookups, back when it only meant "near this point".
-    _map_wmo = None
-    if len(show):
-        _mp = show[["wmo", "type"] + (["km away"] if "km away" in show.columns
-                                      else [])].copy()
-        _mp["lat"] = _mp["wmo"].astype(str).map(
-            dict(zip(floats["wmo"].astype(str), floats["last_lat"])))
-        _mp["lon"] = _mp["wmo"].astype(str).map(
-            dict(zip(floats["wmo"].astype(str), floats["last_lon"])))
-        _mp = _mp.dropna(subset=["lat", "lon"])
-        # list-valued column, so each dot takes its own type color
-        _mp["color"] = [TYPE_COLORS.get(t, TYPE_COLOR_OTHER) for t in _mp["type"]]
-        if len(_mp):
-            # Fit the view to the hits rather than always showing the globe: a single
-            # float would otherwise be one pixel lost in an ocean.
-            _la = _mp["lat"].to_numpy("float64"); _lo = _mp["lon"].to_numpy("float64")
-            _span = max(float(_la.max() - _la.min()), float(_lo.max() - _lo.min()), 0.5)
-            _fit_zoom = next((z for thr, z in [(1, 4), (3, 3.5), (8, 3), (20, 2.5),
-                                               (50, 2), (120, 1.2)] if _span < thr), 0.9)
-            _pt = pd.DataFrame({"lat": [lat_q], "lon": [lon_q]})
-        # deck.gl for every view. A real projection (plotly Scattergeo) fixed the
-        # doubled world and the cropped poles, but gave every float its own SVG node:
-        # 4,299 of them for the live array, against ONE WebGL canvas here. The world
-        # repeating is the cheaper problem to live with than a map that drags.
-        if len(_mp):
-            # id= is required for Streamlit to report pydeck selections
-            _mev = st.pydeck_chart(pdk.Deck(
-                map_style=None,
-                initial_view_state=pdk.ViewState(
-                    latitude=float(lat_q) if near_mode else float(np.median(_la)),
-                    longitude=float(lon_q) if near_mode else float(np.median(_lo)),
-                    zoom=(next((z for thr, z in [(150, 5), (400, 4), (900, 3),
-                                                 (2000, 2)] if radius_q < thr), 1)
-                          if near_mode else _fit_zoom)),
-                layers=[
-                    pdk.Layer("ScatterplotLayer", id="hits", data=_mp,
-                              get_position="[lon, lat]",
-                              get_fill_color="color", get_radius=18000,
-                              radius_min_pixels=4, radius_max_pixels=9,
-                              pickable=True, auto_highlight=True),
-                    *([] if not near_mode else
-                      [pdk.Layer("ScatterplotLayer", id="point", data=_pt,
-                                 get_position="[lon, lat]",
-                                 get_fill_color=[214, 40, 40], get_radius=26000,
-                                 radius_min_pixels=7, radius_max_pixels=11,
-                                 pickable=False)])],
-                tooltip={"text": "float {wmo} · {type}" + ("\n{km away} km away" if near_mode else "")}),
-                height=420, on_select="rerun", selection_mode="single-object",
-                key="matches_map")
-            # clicking a dot opens that float, same as ticking its row
-            _msel = getattr(_mev, "selection", None)
-            _mobjs = ((_msel.get("objects") if isinstance(_msel, dict)
-                       else getattr(_msel, "objects", None)) or {})
-            _mhits = _mobjs.get("hits") or []
-            if _mhits:
-                _map_wmo = str(_mhits[0].get("wmo"))
-        if len(_mp):
-            # legend: only the types actually on this map, in the table's order
-            def _dot(rgba, label):
-                return (f"<span style='display:inline-block;width:9px;height:9px;"
-                        f"border-radius:50%;vertical-align:middle;margin:0 4px 2px 0;"
-                        f"background:rgba({rgba[0]},{rgba[1]},{rgba[2]},"
-                        f"{rgba[3] / 255:.2f})'></span>{label}")
-            _present = [t for t in TYPE_COLORS if (_mp["type"] == t).any()]
-            _other = bool((~_mp["type"].isin(TYPE_COLORS)).any())
-            _leg = [_dot(TYPE_COLORS[t], f"{t} ({int((_mp['type'] == t).sum())})")
-                    for t in _present]
-            if _other:
-                _leg.append(_dot(TYPE_COLOR_OTHER, "other"))
-            if near_mode:
-                _leg.append(_dot([214, 40, 40, 255], "your search point"))
-            st.markdown(
-                "<div style='font-size:0.95rem;opacity:0.85'>"
-                + " &nbsp;·&nbsp; ".join(_leg) + "</div>", unsafe_allow_html=True)
-            st.caption(
-                (f"The {len(_mp):,} float(s) matching your search, at their last known "
-                 "fix" if not near_mode else
-                 f"Each float's last known fix within {radius_q:,} km of "
-                 f"({lat_q:.2f}, {lon_q:.2f})")
-                + " · blue = Core, green = BGC, darker = Deep · click a float to open "
-                  "it. Floats drift, so a fix is where it was last heard from, not "
-                  "where it is now or where it was during its lifetime")
-    cap = "Select a row's checkbox (far left) to open that float ↓"
-    if serial_hit:
-        cap += "  ·  the highlighted **matched on** column shows what your search hit"
-    st.caption(cap)
-    _cfg = {
-        "status": st.column_config.TextColumn(
-            "status", help=f"Active = this float reported a profile within the last "
-                           f"{ACTIVE_DAYS} days. Argo floats surface about every 10 "
-                           "days, so a longer gap almost always means the float has "
-                           "stopped reporting. Taken from the index's last profile "
-                           "date, which is refreshed daily."),
-        "last profile": st.column_config.DatetimeColumn(
-            "last profile", format="YYYY-MM-DD",
-            help="Date of the most recent profile this float reported."),
-        "profiles": st.column_config.NumberColumn(
-            "profiles", format="%d",
-            help="How many profiles (dives) this float has reported, from the index. "
-                 "A long record means more history to plot; the Raw tab pulls these "
-                 "one cycle at a time."),
-        "km away": st.column_config.NumberColumn(
-            "km away", format="%.0f km",
-            help="Great-circle distance from your search point to this float's last "
-                 "known fix. The float has drifted since, so treat it as approximate."),
-    }
-    if serial_hit:
-        _cfg["matched_on"] = st.column_config.TextColumn(
-            "matched on", help="Which identifier your search hit: a sensor serial, "
-                               "the float serial, or the WMO.")
-    wmos = sorted(hits["wmo"].astype(str).unique().tolist())
-    # A float opens from three places: a map dot, a row checkbox, or the dropdown.
-    # Resolve them all here, BEFORE the table renders, so the green highlight tracks
-    # whatever is actually open on this same rerun rather than lagging one click.
-    # Forget remembered clicks whenever the result set changes, and act only on a
-    # *new* selection so the dropdown can still override the other two.
-    sig = (q, model_q, type_q, project_q, pi_q, dac_q,
-           near_mode, lat_q, lon_q, radius_q, active_only)
-    # Bring the map to the top when the search CHANGES, so results land as map above /
-    # table below instead of below a screenful of header. Deliberately not on first
-    # load (an arriving visitor should see the title) and not on every rerun, or
-    # opening a float would yank you back up away from the float you just opened.
-    if "_scroll_sig" not in st.session_state:
-        st.session_state["_scroll_sig"] = sig          # first load: record, don't move
-    elif st.session_state["_scroll_sig"] != sig:
-        st.session_state["_scroll_sig"] = sig
-        st.iframe(f"""
-        <script>
-        // the sig is embedded so this re-executes only when the search changes
-        const _s = {abs(hash(sig)) % 10**8};
-        const d = window.parent.document;
-        // the global map is a plotly geo chart and the regional one is deck.gl, so
-        // match either; retry briefly because the element may not be mounted yet
-        function go(n) {{
-          const el = d.querySelector("[data-testid='stDeckGlJsonChart'], "
-                                   + "[data-testid='stPlotlyChart']")
-                  || d.querySelector("[data-testid='stDataFrame']");
-          if (el) el.scrollIntoView({{behavior: 'smooth', block: 'start'}});
-          else if (n > 0) setTimeout(function() {{ go(n - 1); }}, 200);
-        }}
-        go(12);
-        </script>
-        """, height=1)
-    if st.session_state.get("_match_sig") != sig:
-        st.session_state["_match_sig"] = sig
-        st.session_state.pop("_last_row", None)
-        st.session_state.pop("_last_map_wmo", None)
-        st.session_state.pop("_pin_wmo", None)
-        st.session_state["matches_shown"] = []
-    # The table's selection is by row INDEX and is read-only, so it is read from the
-    # key used for the *previous* render, before any reordering below.
-    _mver = st.session_state.setdefault("matches_ver", 0)
-    _ms = st.session_state.get(f"matches_table_{_mver}")
-    # The wmo order as actually DISPLAYED last render. A row click reports an index
-    # into that order, so it must be resolved against this and not against `show`,
-    # which is rebuilt unpinned each run: pinning shifts every row down by one, so
-    # using show.iloc[] here opened the wrong float.
-    _shown = st.session_state.get("matches_shown", [])
-    # map click (the pydeck chart above already reported this rerun's selection).
-    # Only a map click pins: its row is usually far below the fold. A row click
-    # needs no pinning and reordering under the cursor would just be jarring.
-    if _map_wmo is not None and _map_wmo != st.session_state.get("_last_map_wmo"):
-        st.session_state["_last_map_wmo"] = _map_wmo
-        st.session_state["wmo_pick"] = _map_wmo
-        st.session_state["_pin_wmo"] = _map_wmo
-    # row checkbox: read the widget state recorded by the click that caused this rerun
-    _seld = ((_ms.get("selection") if isinstance(_ms, dict)
-              else getattr(_ms, "selection", None)) if _ms is not None else None)
-    _selrows = ((_seld.get("rows", []) if isinstance(_seld, dict)
-                 else getattr(_seld, "rows", []) or []) if _seld is not None else [])
-    _selrow0 = _selrows[0] if _selrows else None
-    if (_selrow0 is not None and _selrow0 < len(_shown)
-            and _selrow0 != st.session_state.get("_last_row")):
-        st.session_state["_last_row"] = _selrow0
-        st.session_state["wmo_pick"] = _shown[_selrow0]
-    _open = st.session_state.get("wmo_pick")
-    # Streamlit can neither scroll a dataframe to a row nor tick its checkbox, so a
-    # map-clicked float is pinned to the top instead, otherwise its row is lost far
-    # below the fold. The pin survives later row clicks so the table stays put.
-    _pin = st.session_state.get("_pin_wmo")
-    if _pin is not None and (show["wmo"].astype(str) == str(_pin)).any():
-        _ix = show.index[show["wmo"].astype(str) == str(_pin)]
-        show = pd.concat([show.loc[_ix], show.drop(index=_ix)]).reset_index(drop=True)
-    # Retire the table whenever the displayed order changes: its selection is by row
-    # index, so a stale tick would otherwise sit on the wrong float.
-    _order = show["wmo"].astype(str).tolist()
-    if _order != _shown:
-        st.session_state["matches_ver"] = _mver = _mver + 1
-        st.session_state.pop("_last_row", None)
-    st.session_state["matches_shown"] = _order
-    _hl = (_order.index(str(_open)) if _open is not None and str(_open) in _order
-           else None)
-    # Styler colors are explicit, so the green holds in both light and dark mode.
-    _sty = show.style
-    if serial_hit:
-        _sty = _sty.set_properties(subset=["matched_on"],
-                                   **{"background-color": "#fff3cd", "color": "#663c00"})
-    if _hl is not None:
-        _sty = _sty.apply(lambda r: (["background-color:#c3ecd0; color:#0b6b3a"] * len(r)
-                                     if r.name == _hl else [""] * len(r)), axis=1)
-    st.dataframe(_sty, width="stretch", height=220,
-                 on_select="rerun", selection_mode="single-row",
-                 key=f"matches_table_{_mver}", column_config=_cfg)
-    if _pin is not None and _hl is not None and str(_pin) == str(_open):
-        st.caption(f"Float {_open} was picked on the map, so it is pinned to the top; "
-                   "the rest keep their order.")
+    # Once a float is open, the map and table fold into a one-line expander so
+    # the float content starts near the top instead of below two screens of
+    # search results; browsing keeps the full view.
+    _sel_open = str(st.session_state.get("wmo_pick")) in set(hits["wmo"].astype(str))
+    if _sel_open:
+        _res_box = st.expander(f"Map and results table · {n_floats:,} float(s) matched · open to change selection", expanded=False)
+    else:
+        _res_box = st.container()
+    with _res_box:
+        # The map always shows whatever is currently matched: every active float on open,
+        # a narrower set as filters go on, a single float for a lookup. It used to be
+        # suppressed for lookups, back when it only meant "near this point".
+        _map_wmo = None
+        if len(show):
+            _mp = show[["wmo", "type"] + (["km away"] if "km away" in show.columns
+                                          else [])].copy()
+            _mp["lat"] = _mp["wmo"].astype(str).map(
+                dict(zip(floats["wmo"].astype(str), floats["last_lat"])))
+            _mp["lon"] = _mp["wmo"].astype(str).map(
+                dict(zip(floats["wmo"].astype(str), floats["last_lon"])))
+            _mp = _mp.dropna(subset=["lat", "lon"])
+            # list-valued column, so each dot takes its own type color
+            _mp["color"] = [TYPE_COLORS.get(t, TYPE_COLOR_OTHER) for t in _mp["type"]]
+            if len(_mp):
+                # Fit the view to the hits rather than always showing the globe: a single
+                # float would otherwise be one pixel lost in an ocean.
+                _la = _mp["lat"].to_numpy("float64"); _lo = _mp["lon"].to_numpy("float64")
+                _span = max(float(_la.max() - _la.min()), float(_lo.max() - _lo.min()), 0.5)
+                _fit_zoom = next((z for thr, z in [(1, 4), (3, 3.5), (8, 3), (20, 2.5),
+                                                   (50, 2), (120, 1.2)] if _span < thr), 0.9)
+                _pt = pd.DataFrame({"lat": [lat_q], "lon": [lon_q]})
+            # deck.gl for every view. A real projection (plotly Scattergeo) fixed the
+            # doubled world and the cropped poles, but gave every float its own SVG node:
+            # 4,299 of them for the live array, against ONE WebGL canvas here. The world
+            # repeating is the cheaper problem to live with than a map that drags.
+            if len(_mp):
+                # id= is required for Streamlit to report pydeck selections
+                _mev = st.pydeck_chart(pdk.Deck(
+                    map_style=None,
+                    initial_view_state=pdk.ViewState(
+                        latitude=float(lat_q) if near_mode else float(np.median(_la)),
+                        longitude=float(lon_q) if near_mode else float(np.median(_lo)),
+                        zoom=(next((z for thr, z in [(150, 5), (400, 4), (900, 3),
+                                                     (2000, 2)] if radius_q < thr), 1)
+                              if near_mode else _fit_zoom)),
+                    layers=[
+                        pdk.Layer("ScatterplotLayer", id="hits", data=_mp,
+                                  get_position="[lon, lat]",
+                                  get_fill_color="color", get_radius=18000,
+                                  radius_min_pixels=4, radius_max_pixels=9,
+                                  pickable=True, auto_highlight=True),
+                        *([] if not near_mode else
+                          [pdk.Layer("ScatterplotLayer", id="point", data=_pt,
+                                     get_position="[lon, lat]",
+                                     get_fill_color=[214, 40, 40], get_radius=26000,
+                                     radius_min_pixels=7, radius_max_pixels=11,
+                                     pickable=False)])],
+                    tooltip={"text": "float {wmo} · {type}" + ("\n{km away} km away" if near_mode else "")}),
+                    height=420, on_select="rerun", selection_mode="single-object",
+                    key="matches_map")
+                # clicking a dot opens that float, same as ticking its row
+                _msel = getattr(_mev, "selection", None)
+                _mobjs = ((_msel.get("objects") if isinstance(_msel, dict)
+                           else getattr(_msel, "objects", None)) or {})
+                _mhits = _mobjs.get("hits") or []
+                if _mhits:
+                    _map_wmo = str(_mhits[0].get("wmo"))
+            if len(_mp):
+                # legend: only the types actually on this map, in the table's order
+                def _dot(rgba, label):
+                    return (f"<span style='display:inline-block;width:9px;height:9px;"
+                            f"border-radius:50%;vertical-align:middle;margin:0 4px 2px 0;"
+                            f"background:rgba({rgba[0]},{rgba[1]},{rgba[2]},"
+                            f"{rgba[3] / 255:.2f})'></span>{label}")
+                _present = [t for t in TYPE_COLORS if (_mp["type"] == t).any()]
+                _other = bool((~_mp["type"].isin(TYPE_COLORS)).any())
+                _leg = [_dot(TYPE_COLORS[t], f"{t} ({int((_mp['type'] == t).sum())})")
+                        for t in _present]
+                if _other:
+                    _leg.append(_dot(TYPE_COLOR_OTHER, "other"))
+                if near_mode:
+                    _leg.append(_dot([214, 40, 40, 255], "your search point"))
+                st.markdown(
+                    "<div style='font-size:0.95rem;opacity:0.85'>"
+                    + " &nbsp;·&nbsp; ".join(_leg) + "</div>", unsafe_allow_html=True)
+                st.caption(
+                    (f"The {len(_mp):,} float(s) matching your search, at their last known "
+                     "fix" if not near_mode else
+                     f"Each float's last known fix within {radius_q:,} km of "
+                     f"({lat_q:.2f}, {lon_q:.2f})")
+                    + " · blue = Core, green = BGC, darker = Deep · click a float to open "
+                      "it. Floats drift, so a fix is where it was last heard from, not "
+                      "where it is now or where it was during its lifetime")
+        cap = "Select a row's checkbox (far left) to open that float ↓"
+        if serial_hit:
+            cap += "  ·  the highlighted **matched on** column shows what your search hit"
+        st.caption(cap)
+        _cfg = {
+            "status": st.column_config.TextColumn(
+                "status", help=f"Active = this float reported a profile within the last "
+                               f"{ACTIVE_DAYS} days. Argo floats surface about every 10 "
+                               "days, so a longer gap almost always means the float has "
+                               "stopped reporting. Taken from the index's last profile "
+                               "date, which is refreshed daily."),
+            "last profile": st.column_config.DatetimeColumn(
+                "last profile", format="YYYY-MM-DD",
+                help="Date of the most recent profile this float reported."),
+            "profiles": st.column_config.NumberColumn(
+                "profiles", format="%d",
+                help="How many profiles (dives) this float has reported, from the index. "
+                     "A long record means more history to plot; the Raw tab pulls these "
+                     "one cycle at a time."),
+            "km away": st.column_config.NumberColumn(
+                "km away", format="%.0f km",
+                help="Great-circle distance from your search point to this float's last "
+                     "known fix. The float has drifted since, so treat it as approximate."),
+        }
+        if serial_hit:
+            _cfg["matched_on"] = st.column_config.TextColumn(
+                "matched on", help="Which identifier your search hit: a sensor serial, "
+                                   "the float serial, or the WMO.")
+        wmos = sorted(hits["wmo"].astype(str).unique().tolist())
+        # A float opens from three places: a map dot, a row checkbox, or the dropdown.
+        # Resolve them all here, BEFORE the table renders, so the green highlight tracks
+        # whatever is actually open on this same rerun rather than lagging one click.
+        # Forget remembered clicks whenever the result set changes, and act only on a
+        # *new* selection so the dropdown can still override the other two.
+        sig = (q, model_q, type_q, project_q, pi_q, dac_q,
+               near_mode, lat_q, lon_q, radius_q, active_only)
+        # Bring the map to the top when the search CHANGES, so results land as map above /
+        # table below instead of below a screenful of header. Deliberately not on first
+        # load (an arriving visitor should see the title) and not on every rerun, or
+        # opening a float would yank you back up away from the float you just opened.
+        if "_scroll_sig" not in st.session_state:
+            st.session_state["_scroll_sig"] = sig          # first load: record, don't move
+        elif st.session_state["_scroll_sig"] != sig:
+            st.session_state["_scroll_sig"] = sig
+            _pick_pending = (st.session_state.get("wmo_pick") is not None
+                             and str(st.session_state.get("wmo_pick"))
+                             != str(st.session_state.get("_focus_wmo")))
+            if not _pick_pending:
+                st.iframe(f"""
+                <script>
+                // the sig is embedded so this re-executes only when the search changes
+                const _s = {abs(hash(sig)) % 10**8};
+                const d = window.parent.document;
+                // the global map is a plotly geo chart and the regional one is deck.gl, so
+                // match either; retry briefly because the element may not be mounted yet
+                function go(n) {{
+                  const el = d.querySelector("[data-testid='stDeckGlJsonChart'], "
+                                           + "[data-testid='stPlotlyChart']")
+                          || d.querySelector("[data-testid='stDataFrame']");
+                  if (el) el.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+                  else if (n > 0) setTimeout(function() {{ go(n - 1); }}, 200);
+                }}
+                go(12);
+                </script>
+                """, height=1)
+        if st.session_state.get("_match_sig") != sig:
+            st.session_state["_match_sig"] = sig
+            st.session_state.pop("_last_row", None)
+            st.session_state.pop("_last_map_wmo", None)
+            st.session_state.pop("_pin_wmo", None)
+            st.session_state["matches_shown"] = []
+        # The table's selection is by row INDEX and is read-only, so it is read from the
+        # key used for the *previous* render, before any reordering below.
+        _mver = st.session_state.setdefault("matches_ver", 0)
+        _ms = st.session_state.get(f"matches_table_{_mver}")
+        # The wmo order as actually DISPLAYED last render. A row click reports an index
+        # into that order, so it must be resolved against this and not against `show`,
+        # which is rebuilt unpinned each run: pinning shifts every row down by one, so
+        # using show.iloc[] here opened the wrong float.
+        _shown = st.session_state.get("matches_shown", [])
+        # map click (the pydeck chart above already reported this rerun's selection).
+        # Only a map click pins: its row is usually far below the fold. A row click
+        # needs no pinning and reordering under the cursor would just be jarring.
+        if _map_wmo is not None and _map_wmo != st.session_state.get("_last_map_wmo"):
+            st.session_state["_last_map_wmo"] = _map_wmo
+            st.session_state["wmo_pick"] = _map_wmo
+            st.session_state["_pin_wmo"] = _map_wmo
+        # row checkbox: read the widget state recorded by the click that caused this rerun
+        _seld = ((_ms.get("selection") if isinstance(_ms, dict)
+                  else getattr(_ms, "selection", None)) if _ms is not None else None)
+        _selrows = ((_seld.get("rows", []) if isinstance(_seld, dict)
+                     else getattr(_seld, "rows", []) or []) if _seld is not None else [])
+        _selrow0 = _selrows[0] if _selrows else None
+        if (_selrow0 is not None and _selrow0 < len(_shown)
+                and _selrow0 != st.session_state.get("_last_row")):
+            st.session_state["_last_row"] = _selrow0
+            st.session_state["wmo_pick"] = _shown[_selrow0]
+        _open = st.session_state.get("wmo_pick")
+        # Streamlit can neither scroll a dataframe to a row nor tick its checkbox, so a
+        # map-clicked float is pinned to the top instead, otherwise its row is lost far
+        # below the fold. The pin survives later row clicks so the table stays put.
+        _pin = st.session_state.get("_pin_wmo")
+        if _pin is not None and (show["wmo"].astype(str) == str(_pin)).any():
+            _ix = show.index[show["wmo"].astype(str) == str(_pin)]
+            show = pd.concat([show.loc[_ix], show.drop(index=_ix)]).reset_index(drop=True)
+        # Retire the table whenever the displayed order changes: its selection is by row
+        # index, so a stale tick would otherwise sit on the wrong float.
+        _order = show["wmo"].astype(str).tolist()
+        if _order != _shown:
+            st.session_state["matches_ver"] = _mver = _mver + 1
+            st.session_state.pop("_last_row", None)
+        st.session_state["matches_shown"] = _order
+        _hl = (_order.index(str(_open)) if _open is not None and str(_open) in _order
+               else None)
+        # Styler colors are explicit, so the green holds in both light and dark mode.
+        _sty = show.style
+        if serial_hit:
+            _sty = _sty.set_properties(subset=["matched_on"],
+                                       **{"background-color": "#fff3cd", "color": "#663c00"})
+        if _hl is not None:
+            _sty = _sty.apply(lambda r: (["background-color:#c3ecd0; color:#0b6b3a"] * len(r)
+                                         if r.name == _hl else [""] * len(r)), axis=1)
+        st.dataframe(_sty, width="stretch", height=220,
+                     on_select="rerun", selection_mode="single-row",
+                     key=f"matches_table_{_mver}", column_config=_cfg)
+        if _pin is not None and _hl is not None and str(_pin) == str(_open):
+            st.caption(f"Float {_open} was picked on the map, so it is pinned to the top; "
+                       "the rest keep their order.")
 else:
     st.info("Tick **Search near a position** in the sidebar to browse the array on a "
             "map, or type a WMO or serial number to jump to a float.")
@@ -1764,6 +1816,7 @@ if not wmos:
     # nothing is open, so the URL should not claim a float
     st.query_params.pop("wmo", None)
     st.query_params.pop("var", None)
+    st.session_state.pop("_focus_wmo", None)
     st.stop()
 
 # keep the picker in sync with the table; drop a stale pick from a prior search
@@ -1780,11 +1833,28 @@ if not sel_wmo:
             "your search results stay instant.")
     st.query_params.pop("wmo", None)
     st.query_params.pop("var", None)
+    st.session_state.pop("_focus_wmo", None)
     st.stop()
 
 # the URL always names the open float, so the address bar is a shareable link
 if st.query_params.get("wmo") != str(sel_wmo):
     st.query_params["wmo"] = str(sel_wmo)
+# focus the float when it (re)opens: a map dot, row tick, chip or link click lands
+# the viewport on the float content instead of leaving it below the fold
+if st.session_state.get("_focus_wmo") != str(sel_wmo):
+    st.session_state["_focus_wmo"] = str(sel_wmo)
+    st.iframe(f"""
+    <script>
+    const _w = "{sel_wmo}";   // embedded so this re-executes per opened float
+    const d = window.parent.document;
+    function go(n) {{
+      const el = d.querySelector("[data-testid='stTabs']");
+      if (el) el.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+      else if (n > 0) setTimeout(function() {{ go(n - 1); }}, 200);
+    }}
+    go(15);
+    </script>
+    """, height=1)
 _lc1, _lc2 = st.columns([3, 1])
 _lc1.caption("🔗 This view is linkable: the page URL now names this float. Copy it "
              "from the address bar to share.")
