@@ -1306,7 +1306,7 @@ def page_compare():
         help="Each float's profile file is fetched from the GDAC on demand and "
              "cached, so the first load of a new float downloads its file "
              "(often ~10 MB).")
-    _wmos_in = [w for w in _in.replace(",", " ").split() if w][:3]
+    _wmos_in = list(dict.fromkeys(w for w in _in.replace(",", " ").split() if w))[:3]
     st.session_state["cmp_list"] = _wmos_in
     st.session_state["_cmp_sync"] = tuple(_wmos_in)
     if len(_wmos_in) < 2:
@@ -1485,6 +1485,62 @@ def page_compare():
         st.caption("One point per profile: the sample nearest the chosen pressure. "
                    "Gaps mean the float skipped that depth or its values failed "
                    "the selected data view.")
+    # separation over time: each profile paired with the other float's
+    # nearest-in-time profile. Dash styles, not colors, identify the pairs, so
+    # the float colors above keep their meaning.
+    st.markdown("**Distance apart over time**")
+
+    def _positions(ds_x):
+        if not all(k in ds_x for k in ("LATITUDE", "LONGITUDE", "JULD")):
+            return None
+        _p = pd.DataFrame({
+            "time": pd.Series(np.asarray(ds_x["JULD"].values).ravel()),
+            "lat": np.asarray(ds_x["LATITUDE"].values).ravel(),
+            "lon": np.asarray(ds_x["LONGITUDE"].values).ravel()}).dropna()
+        _p = _p.sort_values("time").reset_index(drop=True)
+        return _p if len(_p) else None
+
+    _pos = {_w: _positions(_d) for _w, _d, _t in _loaded}
+    _fig_dist = go.Figure()
+    _dashes = ["solid", "dash", "dot"]
+    _pk = 0
+    for _i in range(len(_loaded)):
+        for _j in range(_i + 1, len(_loaded)):
+            _wa, _wb = _loaded[_i][0], _loaded[_j][0]
+            _pa, _pb = _pos.get(_wa), _pos.get(_wb)
+            if _pa is None or _pb is None:
+                continue
+            _mm = pd.merge_asof(_pa, _pb, on="time", direction="nearest",
+                                tolerance=pd.Timedelta("15D"),
+                                suffixes=("_a", "_b")).dropna()
+            if not len(_mm):
+                _notes.append(f"{_wa} vs {_wb}: their records do not overlap in "
+                              "time, so there is no separation to plot")
+                continue
+            _km = haversine_km(_mm["lat_a"].to_numpy("float64"),
+                               _mm["lon_a"].to_numpy("float64"),
+                               _mm["lat_b"].to_numpy("float64"),
+                               _mm["lon_b"].to_numpy("float64"))
+            _fig_dist.add_trace(go.Scatter(
+                x=_mm["time"], y=_km, mode="lines", name=f"{_wa} vs {_wb}",
+                line=dict(color="#808A95", width=2,
+                          dash=_dashes[_pk % len(_dashes)]),
+                customdata=_km * 0.621371,
+                hovertemplate="%{x|%Y-%m-%d} · %{y:,.0f} km "
+                              "(%{customdata:,.0f} mi) apart<extra>"
+                              + f"{_wa} vs {_wb}" + "</extra>"))
+            _pk += 1
+    if _fig_dist.data:
+        _fig_dist.update_layout(
+            height=320, margin=dict(l=10, r=10, t=70, b=10),
+            xaxis_title="date", yaxis_title="separation (km)",
+            yaxis_rangemode="tozero",
+            showlegend=len(_fig_dist.data) > 1,
+            legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+        st.plotly_chart(_fig_dist, width="stretch")
+        st.caption("Great-circle distance between surfacing positions, pairing "
+                   "each profile with the other float's nearest-in-time profile "
+                   "(within 15 days). Hover for miles.")
     for _n in _notes:
         st.info(_n)
     st.stop()
