@@ -262,12 +262,14 @@ def add_derived(ds):
     return ds
 
 
-def _gdac_get(rel, retries=3):
+def _gdac_get(rel, retries=3, progress=None):
     """Download dac/<...>.nc from the GDAC into ROOT (cached on disk). Returns one of:
     'ok'          - present locally or downloaded now,
     'missing'     - the server answered 4xx (e.g. 404): the file does not exist,
     'unreachable' - network error / timeout / 5xx after retries: could not contact it.
-    The missing/unreachable split lets callers tell 'no such file' from 'no connection'."""
+    The missing/unreachable split lets callers tell 'no such file' from 'no connection'.
+    `progress`, if given, is called as progress(bytes_done, total_bytes) while
+    downloading; total_bytes is 0 when the server sends no Content-Length."""
     dest = os.path.join(ROOT, rel)
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return "ok"
@@ -282,10 +284,17 @@ def _gdac_get(rel, retries=3):
                 if 400 <= r.status_code < 500:
                     return "missing"   # server says the file isn't there; don't retry
                 r.raise_for_status()   # 5xx -> raise, retry below
+                total = int(r.headers.get("Content-Length") or 0)
+                done = 0
+                if progress:
+                    progress(0, total)
                 tmp = dest + ".part"
                 with open(tmp, "wb") as f:
                     for chunk in r.iter_content(chunk_size=1 << 16):
                         f.write(chunk)
+                        done += len(chunk)
+                        if progress:
+                            progress(done, total)
                 os.replace(tmp, dest)
             return "ok"
         except Exception:
@@ -595,6 +604,59 @@ def parse_argo_date(v):
     return pd.NaT
 
 
+@st.cache_data(show_spinner=False)
+def weekly_churn(root, days, today):
+    """Floats launched within the last 7 days, and floats whose last report crossed
+    the `days` inactivity line within the last 7 days. Both come straight from the
+    current index (launch_date / last_date), so no history is needed. Keyed on the
+    calendar day so it follows the daily index refresh without a restart."""
+    _s, fl = load_tables(root)
+    if fl is None or "last_date" not in fl.columns:
+        return [], []
+    now = pd.Timestamp(today)
+    new = []
+    if "launch_date" in fl.columns:
+        lage = (now - pd.to_datetime(fl["launch_date"].map(parse_argo_date),
+                                     errors="coerce")).dt.days
+        new = sorted(fl.loc[lage.between(0, 7).fillna(False), "wmo"].astype(str))
+    page = (now - pd.to_datetime(fl["last_date"].map(parse_argo_date),
+                                 errors="coerce")).dt.days
+    silent = sorted(fl.loc[((page > days) & (page <= days + 7)).fillna(False),
+                           "wmo"].astype(str))
+    return new, silent
+
+
+@st.cache_data(show_spinner=False)
+def showcase_picks(root, days, today):
+    """A few crowd-pleasers chosen from the live index, so they never go stale:
+    the longest-record active BGC float carrying oxygen and chlorophyll sensors,
+    the longest-record active deep float, the longest record overall, plus the
+    active-float pool for a random pick."""
+    _s, fl = load_tables(root)
+    if fl is None or not len(fl) or "last_date" not in fl.columns:
+        return {}, []
+    age = (pd.Timestamp(today)
+           - pd.to_datetime(fl["last_date"].map(parse_argo_date),
+                            errors="coerce")).dt.days
+    active = age.le(days).fillna(False)
+    prof = pd.to_numeric(fl.get("n_profiles"), errors="coerce").fillna(0)
+    params = (fl["parameters"].fillna("").astype(str) if "parameters" in fl.columns
+              else pd.Series("", index=fl.index))
+    picks = {}
+    if "data_kind" in fl.columns:
+        _bgc = fl.index[(fl["data_kind"] == "bgc") & active
+                        & params.str.contains("DOXY") & params.str.contains("CHLA")]
+        if len(_bgc):
+            picks["bgc"] = str(fl.loc[prof.loc[_bgc].idxmax(), "wmo"])
+    if "is_deep" in fl.columns:
+        _deep = fl.index[fl["is_deep"].fillna(False).astype(bool) & active]
+        if len(_deep):
+            picks["deep"] = str(fl.loc[prof.loc[_deep].idxmax(), "wmo"])
+    if float(prof.max()) > 0:
+        picks["long"] = str(fl.loc[prof.idxmax(), "wmo"])
+    return picks, sorted(fl.loc[active, "wmo"].astype(str))
+
+
 def climate_band(lat):
     """Latitude band label (meteorological-ish zones)."""
     a = abs(lat)
@@ -669,6 +731,27 @@ if sensors is None:
     )
     st.stop()
 
+# ---- deep links: ?wmo= (and ?var=) in the URL restore a float on first load.
+# Seeding the search box routes through the direct-lookup path, which ignores
+# filters, so a linked float is never hidden by a filter the recipient never set.
+if "_dl_seen" not in st.session_state:
+    st.session_state["_dl_seen"] = True
+    _dl_w = str(st.query_params.get("wmo") or "").strip()
+    _dl_v = str(st.query_params.get("var") or "").strip().upper()
+    if _dl_v:
+        st.session_state["_dl_var"] = _dl_v
+    if _dl_w and (floats["wmo"].astype(str) == _dl_w).any():
+        st.session_state["q_box"] = _dl_w
+        st.session_state["wmo_pick"] = _dl_w
+
+
+def _open_float(wmo):
+    # on_click callbacks run before any widget is created on the rerun, so seeding
+    # both the search box and the picker here is safe
+    st.session_state["q_box"] = str(wmo)
+    st.session_state["wmo_pick"] = str(wmo)
+
+
 # freshness banner: counts across the WHOLE index (not just locally-cached data)
 kind = floats["data_kind"] if "data_kind" in floats else pd.Series(dtype=object)
 n_bgc = int((kind == "bgc").sum())
@@ -686,6 +769,33 @@ c4.metric("Deep floats", f"{n_deep:,}",
           help=f"PLATFORM_FAMILY = FLOAT_DEEP · {n_sbe61:,} with SBE61 (6000 m).")
 c5.metric("Last synced (UTC)", mani.get("synced_utc", "-"),
           help="When the metadata index was last refreshed.")
+
+# this week's churn: who joined the array, who went quiet, and the net direction
+_new_wmos, _silent_wmos = weekly_churn(
+    ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
+_net = len(_new_wmos) - len(_silent_wmos)
+w1, w2, w3 = st.columns(3)
+w1.metric("New floats (7 days)", f"{len(_new_wmos):,}",
+          help="Floats whose launch date (from their meta file) falls within the "
+               "last 7 days. A float joins the index once it starts reporting.")
+w2.metric("Fell silent (7 days)", f"{len(_silent_wmos):,}",
+          help=f"Floats whose last report crossed the {ACTIVE_DAYS}-day inactivity "
+               "line within the last 7 days. Argo floats surface about every 10 "
+               "days, so a longer gap almost always means the float has stopped.")
+w3.metric("Weekly trend",
+          "growing" if _net > 0 else "shrinking" if _net < 0 else "steady",
+          delta=(f"{_net:+d} floats" if _net else None),
+          help="New floats minus newly-silent floats over the last 7 days: the net "
+               "change in the actively reporting array.")
+if _new_wmos or _silent_wmos:
+    with st.expander("This week's additions and losses (WMOs)", expanded=False):
+        e1, e2 = st.columns(2)
+        e1.markdown("**New** · " + (", ".join(_new_wmos[:40])
+                    + (" …" if len(_new_wmos) > 40 else "") if _new_wmos else "none"))
+        e2.markdown("**Fell silent** · " + (", ".join(_silent_wmos[:40])
+                    + (" …" if len(_silent_wmos) > 40 else "")
+                    if _silent_wmos else "none"))
+
 st.caption("Float data is fetched on demand from the Argo GDAC when you open a float"
            " · the GDAC is mutable (delayed-mode QC rewrites history), so the index "
            "is refreshed periodically; pin a DOI snapshot for publications.")
@@ -755,7 +865,7 @@ st.sidebar.header("Find a float")
 # so rather than make anyone choose a field, search both and let the matched on
 # column say which one hit.
 q = st.sidebar.text_input(
-    "WMO or serial number", placeholder="e.g. 6903132 or 17106",
+    "WMO or serial number", key="q_box", placeholder="e.g. 6903132 or 17106",
     help="One box for either. Matches a WMO, a SENSOR_SERIAL_NO or a FLOAT_SERIAL_NO "
          "(case-insensitive substring), and the results say which one matched. Argo "
          "has no serial-to-float index, so this one is built from every float's "
@@ -902,6 +1012,41 @@ def search():
 
 near_km = floats_near(lat_q, lon_q, radius_q) if near_mode else {}
 hits = search()
+
+# ---- one-click showcase floats: a hands-free way in for first-time visitors.
+# Shown only while browsing; a search replaces them with its results. Clicking one
+# routes through the same lookup path as typing the WMO, so the no-auto-load rule
+# holds: nothing downloads until the click.
+if not q.strip():
+    _picks, _active_pool = showcase_picks(
+        ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
+    if _picks or _active_pool:
+        st.markdown("**New here? Open a real float in one click:**")
+        _chip_defs = [
+            ("bgc", "🧪 BGC veteran",
+             "An active biogeochemical float measuring oxygen and chlorophyll, "
+             "with one of the longest records in the array"),
+            ("deep", "🌊 Deep diver",
+             "An active Deep Argo float, built to profile far below the usual "
+             "2,000 m"),
+            ("long", "📈 Longest record",
+             "The float with the most reported profiles in the whole index"),
+        ]
+        _chips = [(lbl, _picks[k], blurb) for k, lbl, blurb in _chip_defs
+                  if k in _picks]
+        _ccols = st.columns(len(_chips) + (1 if _active_pool else 0))
+        for _cc, (_lbl, _cw, _blurb) in zip(_ccols, _chips):
+            _cc.button(_lbl, help=f"{_blurb} · WMO {_cw}", key=f"chip_{_cw}",
+                       on_click=_open_float, args=(_cw,), width="stretch")
+        if _active_pool:
+            _ccols[-1].button(
+                "🎲 Surprise me", key="chip_rand",
+                help="A random float from the active array, different every time",
+                on_click=_open_float,
+                args=(str(np.random.choice(_active_pool)),), width="stretch")
+        st.caption("Each button looks the float up exactly as if you typed its WMO; "
+                   "its profile file (often ~10 MB) is downloaded only when you "
+                   "click.")
 
 st.subheader("Matches")
 
@@ -1188,6 +1333,9 @@ else:
     wmos = []
 
 if not wmos:
+    # nothing is open, so the URL should not claim a float
+    st.query_params.pop("wmo", None)
+    st.query_params.pop("var", None)
     st.stop()
 
 # keep the picker in sync with the table; drop a stale pick from a prior search
@@ -1202,7 +1350,15 @@ if not sel_wmo:
     st.info("Pick a float to load its profile: click a row's checkbox in the table "
             "above, or use the selector. Nothing is downloaded until you choose one, so "
             "your search results stay instant.")
+    st.query_params.pop("wmo", None)
+    st.query_params.pop("var", None)
     st.stop()
+
+# the URL always names the open float, so the address bar is a shareable link
+if st.query_params.get("wmo") != str(sel_wmo):
+    st.query_params["wmo"] = str(sel_wmo)
+st.caption("🔗 This view is linkable: the page URL now names this float. Copy it "
+           "from the address bar to share.")
 
 # ---- resolve the selected float and load its data ----
 frow = floats[floats["wmo"].astype(str) == str(sel_wmo)]
@@ -1212,6 +1368,13 @@ fsens = sensors[sensors["wmo"].astype(str) == str(sel_wmo)]
 sprof_rel = frow.get("sprof_path") if frow is not None else None
 has_local = bool(sprof_rel) and os.path.exists(os.path.join(ROOT, str(sprof_rel)))
 ds = load_sprof(os.path.join(ROOT, str(sprof_rel))) if has_local else None
+if has_local:
+    try:
+        _mb = os.path.getsize(os.path.join(ROOT, str(sprof_rel))) / 1e6
+        st.caption(f"✓ {os.path.basename(str(sprof_rel))} is already cached here "
+                   f"({_mb:.1f} MB), no download needed.")
+    except OSError:
+        pass
 
 # measurands from the crosswalk / meta
 
@@ -1231,10 +1394,35 @@ if not has_local:
     if not (isinstance(rel, str) and rel):
         suffix = "_Sprof.nc" if str(frow.get("data_kind")) == "bgc" else "_prof.nc"
         rel = f"dac/{frow.get('dac')}/{sel_wmo}/{sel_wmo}{suffix}"
-    st.info(f"Fetching this float's data from the Argo GDAC on demand "
-            f"(`{os.path.basename(rel)}`), cached after the first load.")
-    with st.spinner(f"Downloading {os.path.basename(rel)} from the GDAC…"):
-        status = _gdac_get(rel)
+    _dest = os.path.join(ROOT, rel)
+    if os.path.exists(_dest) and os.path.getsize(_dest) > 0:
+        # on disk from an earlier visit: no download, so no fetch banner either
+        status = "ok"
+        st.caption(f"✓ {os.path.basename(rel)} is already cached here "
+                   f"({os.path.getsize(_dest) / 1e6:.1f} MB), no download needed.")
+    else:
+        st.info(f"Fetching this float's data from the Argo GDAC on demand "
+                f"(`{os.path.basename(rel)}`), cached after the first load.")
+        _base = os.path.basename(rel)
+        _dlbar = st.progress(0.0, text=f"Contacting the GDAC for {_base}…")
+        _dllast = [-1.0]
+
+        def _dl_tick(done, total):
+            # throttle to whole-percent steps so the bar does not flood the websocket
+            if total:
+                frac = min(done / total, 1.0)
+                if frac - _dllast[0] < 0.01 and frac < 1.0:
+                    return
+                _dllast[0] = frac
+                _dlbar.progress(frac, text=f"Downloading {_base} · "
+                                           f"{done / 1e6:.1f} of {total / 1e6:.1f} MB")
+            elif done / 1e6 - _dllast[0] >= 0.5:
+                _dllast[0] = done / 1e6
+                _dlbar.progress(0.0, text=f"Downloading {_base} · "
+                                          f"{done / 1e6:.1f} MB so far")
+
+        status = _gdac_get(rel, progress=_dl_tick)
+        _dlbar.empty()
     if status == "unreachable":
         st.error("Couldn't reach the Argo GDAC to download this float's data. This looks "
                  "like a connection problem, not a missing file. Please try again in a "
@@ -1726,10 +1914,20 @@ with tab_prof:
         return 0
 
     pc1, pc2 = st.columns([2, 2])
-    param = pc1.selectbox("Parameter to plot", param_opts,
-                          index=_default_param_index(param_opts),
+    # deep-linkable parameter: ?var= seeds it once, and the keyed widget keeps the
+    # choice across float switches (sanitized against the new float's options, so a
+    # BGC pick quietly falls back to the default on a core float)
+    _dlv = st.session_state.pop("_dl_var", None)
+    if _dlv in param_opts:
+        st.session_state["param_pick"] = _dlv
+    if st.session_state.get("param_pick") not in param_opts:
+        st.session_state["param_pick"] = (param_opts[_default_param_index(param_opts)]
+                                          if param_opts else None)
+    param = pc1.selectbox("Parameter to plot", param_opts, key="param_pick",
                           help="Includes TEOS-10 derived fields "
                                "(SIGMA0, CT, PT, SA, AOU) when computable.")
+    if param and st.query_params.get("var") != str(param):
+        st.query_params["var"] = str(param)
     view = pc2.radio(
         "Data view", ["Real-time (R)", "QC-filtered", "Adjusted (A/D)"],
         index=2, horizontal=True,
