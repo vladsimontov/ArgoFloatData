@@ -1236,9 +1236,136 @@ _PG_EXPLORE = st.Page(page_explore, title="Explore floats", icon="🌍",
                       default=True)
 _PG_FLEET = st.Page(page_fleet, title="Fleet overview", icon="📊",
                     url_path="fleet")
+def _plottable_params(ds_x):
+    """Parameter names this dataset can plot: real (N_PROF, N_LEVELS) measurands
+    plus whichever TEOS-10 derived fields add_derived computed."""
+    base = {v for v in ds_x.data_vars
+            if getattr(ds_x[v], "dims", ()) == ("N_PROF", "N_LEVELS")
+            and not v.endswith(("_QC", "_ADJUSTED", "_ADJUSTED_QC",
+                                "_ADJUSTED_ERROR"))}
+    base |= {d for d in DERIVED_2D if d in ds_x}
+    return base
+
+
+def page_compare():
+    st.title("Compare floats")
+    st.caption("Median vertical profiles of two or three floats on a shared "
+               "pressure axis: each level is that float's median across its whole "
+               "record, so this is a climatological comparison, good for spotting "
+               "sensor offsets and water-mass contrasts.")
+    if "_cmp_dl_seen" not in st.session_state:
+        st.session_state["_cmp_dl_seen"] = True
+        _dlw = str(st.query_params.get("wmos") or "").strip()
+        if _dlw:
+            st.session_state["cmp_page_wmos"] = ", ".join(
+                w for w in _dlw.split(".") if w.isdigit())
+        _dlv = str(st.query_params.get("var") or "").strip().upper()
+        if _dlv:
+            st.session_state["_cmp_dl_var"] = _dlv
+    _in = st.text_input(
+        "Floats to compare (two or three WMOs, comma separated)",
+        key="cmp_page_wmos", placeholder="e.g. 6903132, 1902304",
+        help="Each float's profile file is fetched from the GDAC on demand and "
+             "cached, so the first load of a new float downloads its file "
+             "(often ~10 MB).")
+    _wmos_in = [w for w in _in.replace(",", " ").split() if w][:3]
+    if len(_wmos_in) < 2:
+        st.info("Name at least two floats to compare. Tip: the float view on the "
+                "Explore page has a 'Compare with another float' button that "
+                "starts this list for you.")
+        st.stop()
+    _loaded, _notes = [], []
+    for _w in _wmos_in:
+        _m = floats[floats["wmo"].astype(str) == _w]
+        if not len(_m):
+            _notes.append(f"{_w}: not in the index")
+            continue
+        _row = _m.iloc[0]
+        _rel = _row.get("sprof_path")
+        if not (isinstance(_rel, str) and _rel
+                and os.path.exists(os.path.join(ROOT, _rel))):
+            _rel = _row.get("expected_rel")
+            if not (isinstance(_rel, str) and _rel):
+                _suf = ("_Sprof.nc" if str(_row.get("data_kind")) == "bgc"
+                        else "_prof.nc")
+                _rel = f"dac/{_row.get('dac')}/{_w}/{_w}{_suf}"
+            _dst = os.path.join(ROOT, _rel)
+            if not (os.path.exists(_dst) and os.path.getsize(_dst) > 0):
+                with st.spinner(f"Fetching float {_w} from the GDAC…"):
+                    if _gdac_get(_rel) != "ok":
+                        _notes.append(f"{_w}: could not fetch its profile file")
+                        continue
+        _base = {"bgc": "BGC", "core": "Core"}.get(str(_row.get("data_kind")), "-")
+        _typ = f"{_base} · Deep" if bool(_row.get("is_deep")) else _base
+        _loaded.append((_w, load_sprof(os.path.join(ROOT, _rel)), _typ))
+    if len(_loaded) < 2:
+        for _n in _notes:
+            st.info(_n)
+        st.stop()
+    _common = set.intersection(*[_plottable_params(d) for _w, d, _t in _loaded])
+    _common -= {"PRES", "MTIME"}
+    _opts = sorted(_common)
+    if not _opts:
+        st.warning("These floats share no plottable parameters.")
+        for _n in _notes:
+            st.info(_n)
+        st.stop()
+    _cc1, _cc2 = st.columns([2, 2])
+    _dlv = st.session_state.pop("_cmp_dl_var", None)
+    if _dlv in _opts:
+        st.session_state["cmp_page_var"] = _dlv
+    if st.session_state.get("cmp_page_var") not in _opts:
+        st.session_state["cmp_page_var"] = next(
+            (p for p in ("TEMP", "PSAL", "CT", "PT", "DOXY") if p in _opts),
+            _opts[0])
+    _cparam = _cc1.selectbox(
+        "Parameter", _opts, key="cmp_page_var",
+        help="Only parameters every compared float carries, TEOS-10 derived "
+             "fields included.")
+    _cview = _cc2.radio(
+        "Data view", ["Real-time (R)", "QC-filtered", "Adjusted (A/D)"],
+        index=2, horizontal=True, key="cmp_page_view",
+        help="Same meaning as in Profile & Trend.")
+    _cadj = _cview.startswith("Adjusted")
+    _cqc = _cview.startswith(("QC", "Adjusted"))
+    _wparam = ".".join(w for w, _d, _t in _loaded)
+    if st.query_params.get("wmos") != _wparam:
+        st.query_params["wmos"] = _wparam
+    if st.query_params.get("var") != str(_cparam):
+        st.query_params["var"] = str(_cparam)
+    _fig = go.Figure()
+    _mh = _chart_colors()[1]
+    for _i, (_w, _d, _typ) in enumerate(_loaded):
+        _df, _pc, _vc = param_long_frame(_d, _cparam, _cadj, _cqc)
+        if _df is None or _df.empty:
+            _notes.append(f"{_w}: no {_cparam} data under this view")
+            continue
+        _mp = (_df.assign(_pb=(_df["pres"] // 10) * 10 + 5)
+               .groupby("_pb")["value"].median().reset_index())
+        _fig.add_trace(go.Scatter(
+            x=_mp["value"], y=_mp["_pb"], mode="lines", name=f"{_w} ({_typ})",
+            line=dict(color=_mh[_i % len(_mh)], width=2),
+            hovertemplate="%{x} at %{y} dbar<extra>" + _w + "</extra>"))
+    if _fig.data:
+        _fig.update_layout(height=520, margin=dict(l=10, r=10, t=70, b=10),
+                           xaxis_title=_cparam, yaxis_title="pressure (dbar)",
+                           yaxis_autorange="reversed",
+                           legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+        st.plotly_chart(_fig, width="stretch")
+        st.caption("Median value per 10 dbar pressure bin across each float's "
+                   "full record · the page URL names this comparison, so it is "
+                   "shareable. Floats from different regions or seasons will "
+                   "differ for perfectly good reasons.")
+    for _n in _notes:
+        st.info(_n)
+    st.stop()
+
+
 _PG_ABOUT = st.Page(page_about, title="About & data API", icon="ℹ️",
                     url_path="about")
-st.navigation([_PG_EXPLORE, _PG_FLEET, _PG_ABOUT]).run()
+_PG_COMPARE = st.Page(page_compare, title="Compare floats", icon="⚖️",
+                      url_path="compare")
+st.navigation([_PG_EXPLORE, _PG_COMPARE, _PG_FLEET, _PG_ABOUT]).run()
 
 # ---------------- Explore (default page) ----------------
 st.title("Argo Float Data Explorer")
@@ -1843,7 +1970,7 @@ if st.session_state.get("_focus_wmo") != str(sel_wmo):
     go(15);
     </script>
     """, height=1)
-_lc1, _lc2 = st.columns([3, 1])
+_lc1, _lc2, _lc3 = st.columns([2.4, 1, 1])
 _lc1.caption("🔗 This view is linkable: the page URL now names this float. Copy it "
              "from the address bar to share.")
 _watching = str(sel_wmo) in st.session_state.get("watchlist", [])
@@ -1852,6 +1979,12 @@ _lc2.button("★ Watching · remove" if _watching else "☆ Watch this float",
             width="stretch",
             help="Watched floats appear in the sidebar with a status light. The "
                  "list rides in the page URL, so a bookmark keeps it.")
+if _lc3.button("⚖️ Compare with another float", key="goto_cmp", width="stretch",
+               help="Opens the Compare page with this float already filled in; "
+                    "add the WMO(s) to compare against there."):
+    st.session_state["cmp_page_wmos"] = str(sel_wmo)
+    st.session_state["_cmp_dl_seen"] = True   # a fresh start, not an old link
+    st.switch_page(_PG_COMPARE)
 
 # ---- resolve the selected float and load its data ----
 frow = floats[floats["wmo"].astype(str) == str(sel_wmo)]
@@ -2218,9 +2351,9 @@ def raw_cycle_frame(path, cycle, core_path=None):
 
 
 # ---- per-float views as tabs (sidebar search + results table stay global) ----
-tab_over, tab_traj, tab_prof, tab_overlay, tab_ts, tab_cmp, tab_tech, tab_raw = \
+tab_over, tab_traj, tab_prof, tab_overlay, tab_ts, tab_tech, tab_raw = \
     st.tabs(["Overview", "Trajectory", "Profile & Trend", "Overlay", "T-S",
-             "Compare", "Tech", "Raw"])
+             "Tech", "Raw"])
 
 # ===================== Overview: metadata + sensors + calibration =====================
 with tab_over:
@@ -3136,90 +3269,3 @@ with tab_tech:
                     _tech[_tech["cycle"] == _lc][["name", "value"]]
                     .reset_index(drop=True),
                     width="stretch", height=300)
-
-# ===================== Compare: median profiles across floats =====================
-with tab_cmp:
-    st.caption("Overlay this float against up to two others as median vertical "
-               "profiles of the parameter picked in **Profile & Trend** (same data "
-               "view). Each pressure level shows the float's median across all its "
-               "casts, so the comparison is climatological, not cast-by-cast.")
-    _cmp_in = st.text_input(
-        "Compare with WMO(s), comma separated", key="cmp_wmos",
-        placeholder="e.g. 5906635, 1902304",
-        help="One or two other floats, by WMO. Their profile files are fetched "
-             "from the GDAC on demand, so the first load of each one downloads "
-             "its file.")
-    if not param:
-        st.info("Pick a plottable parameter in the Profile & Trend tab first.")
-    elif _cmp_in.strip():
-        _cmp_wmos = [w.strip() for w in _cmp_in.split(",") if w.strip()][:2]
-
-        def _median_profile(ds_x):
-            # the frame's columns are literally "pres"/"value"; the returned names
-            # are the dataset variables, kept only for axis labels
-            if not (param in ds_x or f"{param}_ADJUSTED" in ds_x):
-                return None
-            d, _pc, _vc = param_long_frame(ds_x, param, adjusted, apply_qc)
-            if d is None or d.empty:
-                return None
-            d = d.assign(_pb=(d["pres"] // 10) * 10 + 5)
-            m = d.groupby("_pb")["value"].median().reset_index()
-            return m.rename(columns={"_pb": "pres", "value": "val"})
-
-        _mh_cmp = _chart_colors()[1]
-        _fig_c = go.Figure()
-        _cmp_notes = []
-        _mine = _median_profile(ds)
-        if _mine is not None:
-            _fig_c.add_trace(go.Scatter(
-                x=_mine["val"], y=_mine["pres"], mode="lines",
-                name=f"{sel_wmo} (this float)",
-                line=dict(color=_mh_cmp[0], width=2),
-                hovertemplate="%{x} at %{y} dbar<extra>" + str(sel_wmo) + "</extra>"))
-        else:
-            _cmp_notes.append(f"{sel_wmo}: no {param} data under the current view")
-        for _ci, _cw in enumerate(_cmp_wmos):
-            if _cw == str(sel_wmo):
-                continue
-            _crow = floats[floats["wmo"].astype(str) == _cw]
-            if not len(_crow):
-                _cmp_notes.append(f"{_cw}: not in the index")
-                continue
-            _crow = _crow.iloc[0]
-            _crel = _crow.get("sprof_path")
-            if not (isinstance(_crel, str) and _crel
-                    and os.path.exists(os.path.join(ROOT, _crel))):
-                _crel = _crow.get("expected_rel")
-                if not (isinstance(_crel, str) and _crel):
-                    _csuf = ("_Sprof.nc" if str(_crow.get("data_kind")) == "bgc"
-                             else "_prof.nc")
-                    _crel = f"dac/{_crow.get('dac')}/{_cw}/{_cw}{_csuf}"
-                with st.spinner(f"Fetching float {_cw} from the GDAC…"):
-                    if _gdac_get(_crel) != "ok":
-                        _cmp_notes.append(f"{_cw}: could not fetch its profile file")
-                        continue
-            _cds = load_sprof(os.path.join(ROOT, _crel))
-            _cm = _median_profile(_cds)
-            if _cm is None:
-                _cmp_notes.append(f"{_cw}: no {param} data under the current view")
-                continue
-            _fig_c.add_trace(go.Scatter(
-                x=_cm["val"], y=_cm["pres"], mode="lines", name=_cw,
-                line=dict(color=_mh_cmp[(_ci + 1) % len(_mh_cmp)], width=2),
-                hovertemplate="%{x} at %{y} dbar<extra>" + _cw + "</extra>"))
-        if _fig_c.data:
-            _fig_c.update_layout(
-                height=500, margin=dict(l=10, r=10, t=70, b=10),
-                xaxis_title=param, yaxis_title="pressure (dbar)",
-                yaxis_autorange="reversed",
-                legend=dict(orientation="h", y=1.02, yanchor="bottom"))
-            st.plotly_chart(_fig_c, width="stretch")
-            st.caption("Median value per 10 dbar pressure bin across each float's "
-                       "full record. Floats from different regions or seasons will "
-                       "differ for perfectly good reasons; this view is for spotting "
-                       "sensor offsets and water-mass contrasts, not judging floats.")
-        for _n in _cmp_notes:
-            st.info(_n)
-    else:
-        st.info("Type one or two WMOs above to overlay their median profiles "
-                "against this float's.")
