@@ -1224,6 +1224,11 @@ def page_about():
         "float and sensor index as Parquet/JSON, queryable with DuckDB or pandas, "
         "no key needed, refreshed daily. "
         "[Documentation and examples](https://vladsimontov.github.io/ArgoFloatData/api.html).")
+    st.subheader("Data notes")
+    st.markdown(
+        "Float data is fetched on demand from the Argo GDAC when you open a float, "
+        "then cached. The GDAC is mutable (delayed-mode QC rewrites history), so "
+        "the index is refreshed daily; pin a DOI snapshot for publications.")
     st.stop()
 
 
@@ -1237,17 +1242,37 @@ st.navigation([_PG_EXPLORE, _PG_FLEET, _PG_ABOUT]).run()
 
 # ---------------- Explore (default page) ----------------
 st.title("Argo Float Data Explorer")
-st.caption("BGC, Core & Deep Argo float profiles.  Find floats near a location, map "
-           "the live array, or search by sensor serial number, model, type or WMO.")
+st.caption("Search the global Argo array by WMO, serial number, sensor, program "
+           "or position (sidebar), or click a float on the map below.")
 _nw, _sw = weekly_churn(ROOT, ACTIVE_DAYS,
                         pd.Timestamp.now().normalize().isoformat())
-st.page_link(_PG_FLEET, icon="📊",
-             label=f"This week: {len(_nw)} new float(s), {len(_sw)} fell "
-                   "silent. Charts and history live in the Fleet overview.")
-
-st.caption("Float data is fetched on demand from the Argo GDAC when you open a float"
-           " · the GDAC is mutable (delayed-mode QC rewrites history), so the index "
-           "is refreshed periodically; pin a DOI snapshot for publications.")
+_h1, _h2 = st.columns([3, 1])
+_h1.page_link(_PG_FLEET, icon="📊",
+              label=f"This week: {len(_nw)} new float(s), {len(_sw)} fell "
+                    "silent. Charts and history live in the Fleet overview.")
+with _h2.popover("✨ Example floats", width="stretch",
+                 help="A hand-picked float in one click, chosen live from the "
+                      "index. Nothing downloads until you pick one."):
+    _picks, _active_pool = showcase_picks(
+        ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
+    for _k, _lbl, _blurb in (
+            ("bgc", "🧪 BGC veteran",
+             "An active biogeochemical float measuring oxygen and chlorophyll, "
+             "with one of the longest records in the array"),
+            ("deep", "🌊 Deep diver",
+             "An active Deep Argo float, built to profile far below the usual "
+             "2,000 m"),
+            ("long", "📈 Longest record",
+             "The float with the most reported profiles in the whole index")):
+        if _k in _picks:
+            st.button(_lbl, help=f"{_blurb} · WMO {_picks[_k]}",
+                      key=f"chip_{_picks[_k]}", on_click=_open_float,
+                      args=(_picks[_k],), width="stretch")
+    if _active_pool:
+        st.button("🎲 Surprise me", key="chip_rand",
+                  help="A random float from the active array, different every time",
+                  on_click=_open_float,
+                  args=(str(np.random.choice(_active_pool)),), width="stretch")
 
 
 # ---- sidebar: search ----
@@ -1479,46 +1504,9 @@ def search():
 near_km = floats_near(lat_q, lon_q, radius_q) if near_mode else {}
 hits = search()
 
-# ---- one-click showcase floats: a hands-free way in for first-time visitors.
-# Shown only while browsing; a search replaces them with its results. Clicking one
-# routes through the same lookup path as typing the WMO, so the no-auto-load rule
-# holds: nothing downloads until the click.
-if not q.strip():
-    _picks, _active_pool = showcase_picks(
-        ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
-    if _picks or _active_pool:
-        st.markdown("**New here? Open a real float in one click:**")
-        _chip_defs = [
-            ("bgc", "🧪 BGC veteran",
-             "An active biogeochemical float measuring oxygen and chlorophyll, "
-             "with one of the longest records in the array"),
-            ("deep", "🌊 Deep diver",
-             "An active Deep Argo float, built to profile far below the usual "
-             "2,000 m"),
-            ("long", "📈 Longest record",
-             "The float with the most reported profiles in the whole index"),
-        ]
-        _chips = [(lbl, _picks[k], blurb) for k, lbl, blurb in _chip_defs
-                  if k in _picks]
-        _ccols = st.columns(len(_chips) + (1 if _active_pool else 0))
-        for _cc, (_lbl, _cw, _blurb) in zip(_ccols, _chips):
-            _cc.button(_lbl, help=f"{_blurb} · WMO {_cw}", key=f"chip_{_cw}",
-                       on_click=_open_float, args=(_cw,), width="stretch")
-        if _active_pool:
-            _ccols[-1].button(
-                "🎲 Surprise me", key="chip_rand",
-                help="A random float from the active array, different every time",
-                on_click=_open_float,
-                args=(str(np.random.choice(_active_pool)),), width="stretch")
-        st.caption("Each button looks the float up exactly as if you typed its WMO; "
-                   "its profile file (often ~10 MB) is downloaded only when you "
-                   "click.")
-
-st.subheader("Matches")
-
 if True:   # there is always something to show: a lookup, or the browse view
     n_floats = int(hits["wmo"].nunique())
-    st.markdown(f"**{n_floats:,} float{'s' if n_floats != 1 else ''} found**")
+    st.markdown(f"#### Matches · {n_floats:,} float{'s' if n_floats != 1 else ''}")
     if n_floats == 0 and q.strip():
         # A dead end should say what to do next. Typing a sensor model into the
         # identifier box is the obvious mistake, so name it rather than just
