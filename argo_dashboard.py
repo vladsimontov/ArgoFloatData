@@ -1735,14 +1735,10 @@ if True:   # there is always something to show: a lookup, or the browse view
     if serial_hit:
         show.insert(6 if (browsing and near_mode) else 5, "matched_on",
                     show.pop("matched_on"))
-    # Once a float is open, the map and table fold into a one-line expander so
-    # the float content starts near the top instead of below two screens of
-    # search results; browsing keeps the full view.
-    _sel_open = str(st.session_state.get("wmo_pick")) in set(hits["wmo"].astype(str))
-    if _sel_open:
-        _res_box = st.expander(f"Map and results table · {n_floats:,} float(s) matched · open to change selection", expanded=False)
-    else:
-        _res_box = st.container()
+    # The map and table stay visible even while a float is open (Vlad's call:
+    # auto-collapsing the map felt wrong); the scroll-on-open below still takes
+    # the viewport to the float, and scrolling back up finds the map in place.
+    _res_box = st.container()
     with _res_box:
         # The map always shows whatever is currently matched: every active float on open,
         # a narrower set as filters go on, a single float for a lookup. It used to be
