@@ -607,22 +607,37 @@ def parse_argo_date(v):
 @st.cache_data(show_spinner=False)
 def weekly_churn(root, days, today):
     """Floats launched within the last 7 days, and floats whose last report crossed
-    the `days` inactivity line within the last 7 days. Both come straight from the
-    current index (launch_date / last_date), so no history is needed. Keyed on the
-    calendar day so it follows the daily index refresh without a restart."""
+    the `days` inactivity line within the last 7 days, each as a (wmo, type) frame
+    using the same type labels as the matches table (BGC / Core, with ' · Deep'
+    appended for deep floats). Both come straight from the current index
+    (launch_date / last_date), so no history is needed. Keyed on the calendar day
+    so it follows the daily index refresh without a restart."""
     _s, fl = load_tables(root)
+    empty = pd.DataFrame(columns=["wmo", "type"])
     if fl is None or "last_date" not in fl.columns:
-        return [], []
+        return empty, empty
     now = pd.Timestamp(today)
-    new = []
+
+    def _typed(mask):
+        sub = fl.loc[mask]
+        base = (sub["data_kind"].astype(str).map({"bgc": "BGC", "core": "Core"})
+                if "data_kind" in sub.columns
+                else pd.Series(index=sub.index, dtype=object)).fillna("-")
+        deep = (sub["is_deep"].fillna(False).astype(bool)
+                if "is_deep" in sub.columns
+                else pd.Series(False, index=sub.index))
+        return pd.DataFrame({"wmo": sub["wmo"].astype(str),
+                             "type": base.where(~deep, base + " · Deep")}
+                            ).sort_values("wmo").reset_index(drop=True)
+
+    new = empty
     if "launch_date" in fl.columns:
         lage = (now - pd.to_datetime(fl["launch_date"].map(parse_argo_date),
                                      errors="coerce")).dt.days
-        new = sorted(fl.loc[lage.between(0, 7).fillna(False), "wmo"].astype(str))
+        new = _typed(lage.between(0, 7).fillna(False))
     page = (now - pd.to_datetime(fl["last_date"].map(parse_argo_date),
                                  errors="coerce")).dt.days
-    silent = sorted(fl.loc[((page > days) & (page <= days + 7)).fillna(False),
-                           "wmo"].astype(str))
+    silent = _typed(((page > days) & (page <= days + 7)).fillna(False))
     return new, silent
 
 
@@ -770,31 +785,55 @@ c4.metric("Deep floats", f"{n_deep:,}",
 c5.metric("Last synced (UTC)", mani.get("synced_utc", "-"),
           help="When the metadata index was last refreshed.")
 
-# this week's churn: who joined the array, who went quiet, and the net direction
-_new_wmos, _silent_wmos = weekly_churn(
+# this week's churn: who joined the array, who went quiet, and the net direction,
+# broken down by float type (BGC / Core, deep floats labeled '· Deep')
+_new_df, _silent_df = weekly_churn(
     ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
-_net = len(_new_wmos) - len(_silent_wmos)
+_net = len(_new_df) - len(_silent_df)
+
+
+def _by_type(df):
+    """'8 Core, 3 BGC, 1 Core · Deep', largest group first."""
+    return (", ".join(f"{int(n)} {t}" for t, n in df["type"].value_counts().items())
+            if len(df) else "none")
+
+
 w1, w2, w3 = st.columns(3)
-w1.metric("New floats (7 days)", f"{len(_new_wmos):,}",
+w1.metric("New floats (7 days)", f"{len(_new_df):,}",
           help="Floats whose launch date (from their meta file) falls within the "
                "last 7 days. A float joins the index once it starts reporting.")
-w2.metric("Fell silent (7 days)", f"{len(_silent_wmos):,}",
+w1.caption(_by_type(_new_df))
+w2.metric("Fell silent (7 days)", f"{len(_silent_df):,}",
           help=f"Floats whose last report crossed the {ACTIVE_DAYS}-day inactivity "
                "line within the last 7 days. Argo floats surface about every 10 "
                "days, so a longer gap almost always means the float has stopped.")
+w2.caption(_by_type(_silent_df))
 w3.metric("Weekly trend",
           "growing" if _net > 0 else "shrinking" if _net < 0 else "steady",
           delta=(f"{_net:+d} floats" if _net else None),
           help="New floats minus newly-silent floats over the last 7 days: the net "
                "change in the actively reporting array.")
-if _new_wmos or _silent_wmos:
+_net_by_type = (_new_df["type"].value_counts()
+                .sub(_silent_df["type"].value_counts(), fill_value=0).astype(int))
+_net_by_type = _net_by_type[_net_by_type != 0].sort_values()
+if len(_net_by_type):
+    w3.caption(", ".join(f"{t} {int(v):+d}" for t, v in _net_by_type.items()))
+if len(_new_df) or len(_silent_df):
     with st.expander("This week's additions and losses (WMOs)", expanded=False):
+
+        def _grouped(df):
+            if not len(df):
+                return "none"
+            lines = []
+            for t, grp in df.groupby("type", sort=True):
+                ws = grp["wmo"].tolist()
+                lines.append(f"**{t}** ({len(ws)}): " + ", ".join(ws[:30])
+                             + (" …" if len(ws) > 30 else ""))
+            return "  \n".join(lines)
+
         e1, e2 = st.columns(2)
-        e1.markdown("**New** · " + (", ".join(_new_wmos[:40])
-                    + (" …" if len(_new_wmos) > 40 else "") if _new_wmos else "none"))
-        e2.markdown("**Fell silent** · " + (", ".join(_silent_wmos[:40])
-                    + (" …" if len(_silent_wmos) > 40 else "")
-                    if _silent_wmos else "none"))
+        e1.markdown("**New**  \n" + _grouped(_new_df))
+        e2.markdown("**Fell silent**  \n" + _grouped(_silent_df))
 
 st.caption("Float data is fetched on demand from the Argo GDAC when you open a float"
            " · the GDAC is mutable (delayed-mode QC rewrites history), so the index "
