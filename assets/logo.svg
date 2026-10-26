@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="252" height="46" viewBox="0 0 252 46" role="img" aria-label="Argo Float Explorer">
+  <g fill="none" stroke-linecap="round">
+    <path d="M6 14 q6 -8 12 0 t12 0" stroke="#4FA3DC" stroke-width="3.4"/>
+    <path d="M6 23 q6 -8 12 0 t12 0" stroke="#1D5FBF" stroke-width="3.4"/>
+    <path d="M6 32 q6 -8 12 0 t12 0" stroke="#1E7E46" stroke-width="3.4"/>
+  </g>
+  <text x="42" y="26" font-family="-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+        font-size="18" font-weight="700" fill="#3E8FD0">Argo Float Explorer</text>
+  <text x="42" y="40" font-family="-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+        font-size="10.5" font-weight="500" fill="#8899AA">BGC · Core · Deep, the live array</text>
+</svg>

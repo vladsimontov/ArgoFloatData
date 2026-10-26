@@ -93,13 +93,33 @@ REGION_DEFAULT = "Mediterranean (western)"
 # each is its Deep variant. Deep is orthogonal to Core/BGC, so hue carries the
 # sensor payload and lightness carries the depth class, which keeps all four
 # readable at once. ColorBrewer Blues/Greens, RGBA.
+# One color per float type, everywhere it appears (map dots, legends, charts).
+# Both palettes were validated (lightness band, chroma floor, CVD and normal-vision
+# separation) against light and dark chart surfaces; the deck.gl map keeps the
+# light-mode values since its Carto basemap is always light.
+TYPE_HEX = {           # light surfaces
+    "Core": "#4FA3DC", "Core · Deep": "#1D5FBF",
+    "BGC": "#4DAE54", "BGC · Deep": "#1E7E46"}
+TYPE_HEX_DARK = {      # the same hues, re-stepped for dark surfaces
+    "Core": "#4399D6", "Core · Deep": "#1D5FBF",
+    "BGC": "#4CAC53", "BGC · Deep": "#167339"}
+# categorical set for platform-model series (fixed order, never cycled)
+MODEL_HEX = ["#4269D0", "#D29A0B", "#239E86", "#E05B44"]
+MODEL_HEX_DARK = ["#4269D0", "#C08A0C", "#239E86", "#E05B44"]
 TYPE_COLORS = {
-    "Core": [107, 174, 214, 190],
-    "Core · Deep": [8, 69, 148, 220],
-    "BGC": [116, 196, 118, 190],
-    "BGC · Deep": [0, 90, 50, 220],
+    "Core": [79, 163, 220, 190],
+    "Core · Deep": [29, 95, 191, 220],
+    "BGC": [77, 174, 84, 190],
+    "BGC · Deep": [30, 126, 70, 220],
 }
 TYPE_COLOR_OTHER = [150, 150, 150, 180]
+
+
+def _chart_colors():
+    """Theme-matched chart palettes (st.context.theme knows the client theme)."""
+    thm = getattr(getattr(st, "context", None), "theme", None)
+    dark = bool(thm is not None and getattr(thm, "type", "") == "dark")
+    return ((TYPE_HEX_DARK, MODEL_HEX_DARK) if dark else (TYPE_HEX, MODEL_HEX))
 
 
 # ---- contact / feedback ------------------------------------------------------
@@ -116,11 +136,23 @@ GDAC = os.environ.get("ARGO_GDAC", "https://data-argo.ifremer.fr").rstrip("/")
 st.set_page_config(
     page_title="Argo Float Data Explorer: BGC, Core & Deep Argo profiles",
     page_icon="🌊", layout="wide", initial_sidebar_state="expanded")
+_logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "assets", "logo.svg")
+if os.path.exists(_logo_path):
+    st.logo(_logo_path, size="large")
 
 # small style polish (Streamlit constrains most styling)
 st.markdown("""
 <style>
   .block-container {padding-top: 2rem;}
+  /* brand accent on the active tab underline; per-scheme so auto dark mode,
+     which a config.toml [theme] would pin, keeps working */
+  @media (prefers-color-scheme: light) {
+    .stTabs [data-baseweb="tab-highlight"] {background-color: #1D5FBF;}
+  }
+  @media (prefers-color-scheme: dark) {
+    .stTabs [data-baseweb="tab-highlight"] {background-color: #4FA3DC;}
+  }
   [data-testid="stMetricValue"] {font-size: 1.1rem;}
   .stDataFrame {font-size: 0.9rem;}
   /* larger, bolder tab labels so the active view stays easy to track */
@@ -318,6 +350,36 @@ def load_sprof(path):
 def load_raw(path):
     # a single-cycle file, opened as reported (no derived fields, no QC filtering)
     return xr.open_dataset(path, decode_times=True)
+
+
+@st.cache_data(show_spinner=False)
+def load_tech(path):
+    """Tidy (cycle, name, value, num) frame from an Argo <wmo>_tech.nc file.
+    Values arrive as strings; `num` is the numeric coercion (NaN for text ones).
+    Parameter names vary by float model and DAC, so nothing here assumes any."""
+    try:
+        tds = xr.open_dataset(path, decode_times=False)
+    except Exception:
+        return None
+
+    def _txt(var):
+        if var not in tds:
+            return None
+        return [x.decode("ascii", "ignore").strip() if isinstance(x, bytes)
+                else str(x).strip() for x in np.asarray(tds[var].values).ravel()]
+
+    names = _txt("TECHNICAL_PARAMETER_NAME")
+    vals = _txt("TECHNICAL_PARAMETER_VALUE")
+    if not names or not vals:
+        return pd.DataFrame(columns=["cycle", "name", "value", "num"])
+    cyc = (pd.to_numeric(pd.Series(np.asarray(tds["CYCLE_NUMBER"].values).ravel()),
+                         errors="coerce")
+           if "CYCLE_NUMBER" in tds else pd.Series([np.nan] * len(names)))
+    df = pd.DataFrame({"cycle": cyc.values[:len(names)], "name": names,
+                       "value": vals})
+    df = df[df["name"] != ""]
+    df["num"] = pd.to_numeric(df["value"], errors="coerce")
+    return df.reset_index(drop=True)
 
 
 def fetch_raw_profile(dac, wmo, cycle, is_bgc):
@@ -672,6 +734,32 @@ def showcase_picks(root, days, today):
     return picks, sorted(fl.loc[active, "wmo"].astype(str))
 
 
+@st.cache_data(show_spinner=False)
+def fleet_history(root, today):
+    """Per-float launch/last timestamps plus type and platform model: the raw
+    material for the fleet analytics charts. Index-only (no GDAC fetches) and
+    keyed on the calendar day, so it follows the daily refresh."""
+    _s, fl = load_tables(root)
+    cols = ["wmo", "type", "platform", "launch", "last"]
+    if fl is None or not {"launch_date", "last_date"}.issubset(fl.columns):
+        return pd.DataFrame(columns=cols)
+    launch = pd.to_datetime(fl["launch_date"].map(parse_argo_date), errors="coerce")
+    last = pd.to_datetime(fl["last_date"].map(parse_argo_date), errors="coerce")
+    base = (fl["data_kind"].astype(str).map({"bgc": "BGC", "core": "Core"})
+            if "data_kind" in fl.columns
+            else pd.Series(index=fl.index, dtype=object)).fillna("-")
+    deep = (fl["is_deep"].fillna(False).astype(bool) if "is_deep" in fl.columns
+            else pd.Series(False, index=fl.index))
+    out = pd.DataFrame({"wmo": fl["wmo"].astype(str),
+                        "type": base.where(~deep, base + " · Deep"),
+                        "platform": (fl["platform_type"].fillna("?").astype(str)
+                                     .str.strip()
+                                     if "platform_type" in fl.columns else "?"),
+                        "launch": launch, "last": last})
+    out = out.dropna(subset=["launch", "last"])
+    return out[out["launch"] <= out["last"]].reset_index(drop=True)
+
+
 def climate_band(lat):
     """Latitude band label (meteorological-ish zones)."""
     a = abs(lat)
@@ -734,7 +822,7 @@ def mann_kendall_sen(t_years, y):
 sensors, floats = load_tables(ROOT)
 mani = read_manifest(ROOT)
 
-st.title("🌊 Argo Float Data Explorer")
+st.title("Argo Float Data Explorer")
 st.caption("BGC, Core & Deep Argo float profiles.  Find floats near a location, map "
            "the live array, or search by sensor serial number, model, type or WMO.")
 if sensors is None:
@@ -758,6 +846,12 @@ if "_dl_seen" not in st.session_state:
     if _dl_w and (floats["wmo"].astype(str) == _dl_w).any():
         st.session_state["q_box"] = _dl_w
         st.session_state["wmo_pick"] = _dl_w
+    _dl_watch = str(st.query_params.get("watch") or "").strip()
+    if _dl_watch:
+        _ws = [w for w in _dl_watch.split(".") if w.isdigit()]
+        if _ws:
+            st.session_state["watchlist"] = _ws
+st.session_state.setdefault("watchlist", [])
 
 
 def _open_float(wmo):
@@ -765,6 +859,24 @@ def _open_float(wmo):
     # both the search box and the picker here is safe
     st.session_state["q_box"] = str(wmo)
     st.session_state["wmo_pick"] = str(wmo)
+
+
+def _sync_watch_param():
+    wl = st.session_state.get("watchlist", [])
+    if wl:
+        st.query_params["watch"] = ".".join(wl)
+    else:
+        st.query_params.pop("watch", None)
+
+
+def _toggle_watch(wmo):
+    wl = st.session_state.setdefault("watchlist", [])
+    wmo = str(wmo)
+    if wmo in wl:
+        wl.remove(wmo)
+    else:
+        wl.append(wmo)
+    _sync_watch_param()
 
 
 # freshness banner: counts across the WHOLE index (not just locally-cached data)
@@ -834,6 +946,130 @@ if len(_new_df) or len(_silent_df):
         e1, e2 = st.columns(2)
         e1.markdown("**New**  \n" + _grouped(_new_df))
         e2.markdown("**Fell silent**  \n" + _grouped(_silent_df))
+
+# ---- fleet analytics: the whole array's history, reconstructed from the index ----
+with st.expander("Fleet analytics · deployments, lifespans and survival since 1999",
+                 expanded=False):
+    _fh = fleet_history(ROOT, pd.Timestamp.now().normalize().isoformat())
+    if not len(_fh):
+        st.info("The index has no launch/last dates to chart.")
+    else:
+        _now_ts = pd.Timestamp.now().normalize()
+        _th, _mh = _chart_colors()
+        _ftypes = [t for t in TYPE_COLORS if (_fh["type"] == t).any()]
+        _done = _fh[(_now_ts - _fh["last"]).dt.days > ACTIVE_DAYS]
+        _life_yrs = ((_done["last"] - _done["launch"]).dt.days / 365.25).clip(lower=0)
+        _dep_year = _fh["launch"].dt.year
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Reporting now", f"{(len(_fh) - len(_done)):,}",
+                  help=f"Floats whose last profile is within {ACTIVE_DAYS} days.")
+        a2.metric("Median completed lifespan", f"{_life_yrs.median():.1f} yr",
+                  help="Across floats that have stopped reporting: launch to last "
+                       "profile. Active floats are not counted, so this is not "
+                       "biased by floats still going strong.")
+        a3.metric("Busiest deployment year",
+                  str(int(_dep_year.value_counts().idxmax())),
+                  help="The calendar year with the most float launches.")
+
+        g1, g2 = st.columns(2)
+        # 1) active floats over time, one line per type
+        _months = pd.date_range("1999-01-01", _now_ts, freq="MS")
+        _mv = _months.values.astype("datetime64[ns]")
+        _fig_a = go.Figure()
+        for _t in _ftypes:
+            _sub = _fh[_fh["type"] == _t]
+            _ls = np.sort(_sub["launch"].values.astype("datetime64[ns]"))
+            _le = np.sort(_sub["last"].values.astype("datetime64[ns]"))
+            _n = (np.searchsorted(_ls, _mv, side="right")
+                  - np.searchsorted(_le, _mv, side="left"))
+            _fig_a.add_trace(go.Scatter(
+                x=_months, y=_n, name=_t, mode="lines",
+                line=dict(color=_th[_t], width=2),
+                hovertemplate="%{x|%Y-%m} · %{y:,} reporting<extra>" + _t + "</extra>"))
+        _fig_a.update_layout(
+            height=330, margin=dict(l=10, r=10, t=30, b=10),
+            yaxis_title="floats", legend=dict(orientation="h", y=1.02,
+                                              yanchor="bottom"))
+        g1.markdown("**Reporting floats over time**")
+        g1.plotly_chart(_fig_a, width="stretch")
+        # 2) deployments per year, stacked by type
+        _dep = (_fh.assign(year=_dep_year).groupby(["year", "type"]).size()
+                .unstack(fill_value=0))
+        _dep = _dep.loc[(_dep.index >= 1998) & (_dep.index <= _now_ts.year),
+                        [t for t in _ftypes if t in _dep.columns]]
+        _fig_d = go.Figure()
+        for _t in _dep.columns:
+            _fig_d.add_trace(go.Bar(
+                x=_dep.index, y=_dep[_t], name=_t, marker_color=_th[_t],
+                hovertemplate="%{x} · %{y:,} launched<extra>" + _t + "</extra>"))
+        _fig_d.update_layout(
+            barmode="stack", height=330, margin=dict(l=10, r=10, t=30, b=10),
+            yaxis_title="floats launched",
+            legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+        g2.markdown("**Deployments per year**")
+        g2.plotly_chart(_fig_d, width="stretch")
+
+        g3, g4 = st.columns(2)
+        # 3) lifespan distribution (completed floats only; the title names the
+        #    single series, so no legend)
+        _fig_l = go.Figure(go.Histogram(
+            x=_life_yrs, xbins=dict(start=0, end=12, size=0.5),
+            marker_color=_th["Core"],
+            hovertemplate="%{x} yr · %{y:,} floats<extra></extra>"))
+        _fig_l.update_layout(
+            height=330, margin=dict(l=10, r=10, t=30, b=10),
+            xaxis_title="years", yaxis_title="floats")
+        g3.markdown("**Completed lifespans (launch to last profile)**")
+        g3.plotly_chart(_fig_l, width="stretch")
+        # 4) survival by platform model: among floats launched at least t years
+        #    ago, the fraction that were still reporting t years after launch
+        _top_models = _fh["platform"].replace("?", np.nan).dropna() \
+                                     .value_counts().head(4).index.tolist()
+        _tgrid = np.arange(0, 10.01, 0.25)
+        _fig_s = go.Figure()
+        for _mdl, _mc in zip(_top_models, _mh):
+            _sub = _fh[_fh["platform"] == _mdl]
+            _lifed = (_sub["last"] - _sub["launch"]).dt.days.to_numpy("float64")
+            _aged = (_now_ts - _sub["launch"]).dt.days.to_numpy("float64")
+            _fr = []
+            for _ty in _tgrid:
+                _td = _ty * 365.25
+                _coh = _aged >= _td
+                _fr.append(float((_lifed[_coh] >= _td).mean())
+                           if _coh.sum() >= 50 else np.nan)
+            _fig_s.add_trace(go.Scatter(
+                x=_tgrid, y=_fr, name=_mdl, mode="lines",
+                line=dict(color=_mc, width=2),
+                hovertemplate="%{x:.2f} yr · %{y:.0%} still reporting<extra>"
+                              + _mdl + "</extra>"))
+        _fig_s.update_layout(
+            height=330, margin=dict(l=10, r=10, t=30, b=10),
+            xaxis_title="years since launch", yaxis_title="still reporting",
+            yaxis_tickformat=".0%",
+            legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+        g4.markdown("**Survival by platform model (top 4)**")
+        g4.plotly_chart(_fig_s, width="stretch")
+        st.caption(
+            "All four charts come from the metadata index alone (launch date, last "
+            "profile date, type, platform model), refreshed daily. A float counts "
+            "as reporting between its launch and its last profile. Survival curves "
+            "stop where a cohort drops below 50 floats.")
+        if st.checkbox("Show the numbers as tables", value=False,
+                       help="The same data as the charts, for reading exact values "
+                            "or copying out."):
+            t1, t2 = st.columns(2)
+            t1.markdown("**Deployments per year**")
+            t1.dataframe(_dep, width="stretch", height=240)
+            _active_tbl = pd.DataFrame(
+                {_t: (np.searchsorted(np.sort(_fh.loc[_fh["type"] == _t, "launch"]
+                                              .values.astype("datetime64[ns]")),
+                                      _mv, side="right")
+                      - np.searchsorted(np.sort(_fh.loc[_fh["type"] == _t, "last"]
+                                                .values.astype("datetime64[ns]")),
+                                        _mv, side="left"))
+                 for _t in _ftypes}, index=_months.strftime("%Y-%m"))
+            t2.markdown("**Reporting floats by month**")
+            t2.dataframe(_active_tbl.iloc[::-1], width="stretch", height=240)
 
 st.caption("Float data is fetched on demand from the Argo GDAC when you open a float"
            " · the GDAC is mutable (delayed-mode QC rewrites history), so the index "
@@ -923,6 +1159,27 @@ type_q = st.sidebar.selectbox(
 models = ["(any)"] + sorted(sensors["sensor_model"].dropna().unique().tolist())
 model_q = st.sidebar.selectbox("Sensor model", models,
                                help="e.g. SBE41, SBE41CP for the CTD.")
+_projects = (["(any)"] + sorted(sensors["project_name"].dropna().astype(str)
+                                .str.strip().replace("", np.nan).dropna().unique())
+             if "project_name" in sensors.columns else ["(any)"])
+project_q = st.sidebar.selectbox(
+    "Project / program", _projects, key="project_q",
+    help="The program that owns the float, from its meta file: national programs "
+         "(Argo Australia, J-ARGO), missions (SOCCOM, GO-BGC), and others. Type to "
+         "search the list.")
+_pis = (["(any)"] + sorted(sensors["pi_name"].dropna().astype(str)
+                           .str.strip().replace("", np.nan).dropna().unique())
+        if "pi_name" in sensors.columns else ["(any)"])
+pi_q = st.sidebar.selectbox(
+    "Principal investigator", _pis, key="pi_q",
+    help="The PI named in the float's meta file. Type to search the list.")
+_dacs = (["(any)"] + sorted(sensors["dac"].dropna().astype(str).unique())
+         if "dac" in sensors.columns else ["(any)"])
+dac_q = st.sidebar.selectbox(
+    "DAC (data centre)", _dacs, key="dac_q",
+    help="The national Data Assembly Centre that processes the float: a rough "
+         "country/agency proxy (aoml = US, coriolis = France, csiro = Australia, "
+         "jma = Japan, bodc = UK, ...).")
 # Was buried inside the location block, so you could not filter to active floats
 # unless you were also searching by position. It is a float property, not a
 # location setting, so it lives here with the others.
@@ -1020,6 +1277,32 @@ def floats_near(lat, lon, km):
     return dict(zip(f["wmo"].astype(str), f["_km"]))
 
 
+# ---- sidebar: watchlist (carried in the page URL, so a bookmark keeps it) ----
+_watchlist = st.session_state.get("watchlist", [])
+if _watchlist:
+    st.sidebar.markdown("**Watchlist**")
+    st.sidebar.caption("Carried in the page URL: bookmark the page to keep the "
+                       "list. 🔴 means the float has stopped reporting.")
+    for _w in list(_watchlist):
+        _wlp = parse_argo_date(last_raw_by_wmo.get(_w))
+        _wage = ((pd.Timestamp.now().normalize() - _wlp).days
+                 if pd.notna(_wlp) else None)
+        _dot = "⚪" if _wage is None else ("🟢" if _wage <= ACTIVE_DAYS else "🔴")
+        _lbl = f"{_dot} {_w}" + (f" · {_wlp:%Y-%m-%d}" if pd.notna(_wlp) else "")
+        _wc1, _wc2 = st.sidebar.columns([5, 1])
+        _wc1.button(_lbl, key=f"watch_open_{_w}", on_click=_open_float, args=(_w,),
+                    width="stretch",
+                    help="Open this float. The date is its last reported profile.")
+        _wc2.button("✕", key=f"watch_del_{_w}", on_click=_toggle_watch, args=(_w,),
+                    help="Remove from the watchlist.")
+
+st.sidebar.divider()
+st.sidebar.caption(
+    "**[Data API](https://vladsimontov.github.io/ArgoFloatData/api.html)** · query "
+    "the whole index (floats, sensors, serial numbers) over plain HTTP with DuckDB "
+    "or pandas. Free, no key, refreshed daily.")
+
+
 # resolve search -> candidate floats
 def search():
     """Two modes, deliberately not mixed.
@@ -1041,6 +1324,12 @@ def search():
                   | df["float_serial_no"].fillna("").str.lower().str.contains(s, regex=False)]
     if model_q != "(any)":
         df = df[df["sensor_model"].fillna("") == model_q]
+    if project_q != "(any)":
+        df = df[df["project_name"].fillna("").astype(str).str.strip() == project_q]
+    if pi_q != "(any)":
+        df = df[df["pi_name"].fillna("").astype(str).str.strip() == pi_q]
+    if dac_q != "(any)":
+        df = df[df["dac"].fillna("").astype(str) == dac_q]
     if type_q != "(any)":
         df = df[df["wmo"].astype(str).map(type_by_wmo).eq(type_q)]
     if active_only:
@@ -1277,7 +1566,8 @@ if True:   # there is always something to show: a lookup, or the browse view
     # whatever is actually open on this same rerun rather than lagging one click.
     # Forget remembered clicks whenever the result set changes, and act only on a
     # *new* selection so the dropdown can still override the other two.
-    sig = (q, model_q, type_q, near_mode, lat_q, lon_q, radius_q, active_only)
+    sig = (q, model_q, type_q, project_q, pi_q, dac_q,
+           near_mode, lat_q, lon_q, radius_q, active_only)
     # Bring the map to the top when the search CHANGES, so results land as map above /
     # table below instead of below a screenful of header. Deliberately not on first
     # load (an arriving visitor should see the title) and not on every rerun, or
@@ -1396,8 +1686,15 @@ if not sel_wmo:
 # the URL always names the open float, so the address bar is a shareable link
 if st.query_params.get("wmo") != str(sel_wmo):
     st.query_params["wmo"] = str(sel_wmo)
-st.caption("🔗 This view is linkable: the page URL now names this float. Copy it "
-           "from the address bar to share.")
+_lc1, _lc2 = st.columns([3, 1])
+_lc1.caption("🔗 This view is linkable: the page URL now names this float. Copy it "
+             "from the address bar to share.")
+_watching = str(sel_wmo) in st.session_state.get("watchlist", [])
+_lc2.button("★ Watching · remove" if _watching else "☆ Watch this float",
+            key="watch_toggle", on_click=_toggle_watch, args=(str(sel_wmo),),
+            width="stretch",
+            help="Watched floats appear in the sidebar with a status light. The "
+                 "list rides in the page URL, so a bookmark keeps it.")
 
 # ---- resolve the selected float and load its data ----
 frow = floats[floats["wmo"].astype(str) == str(sel_wmo)]
@@ -1764,8 +2061,9 @@ def raw_cycle_frame(path, cycle, core_path=None):
 
 
 # ---- per-float views as tabs (sidebar search + results table stay global) ----
-tab_over, tab_traj, tab_prof, tab_overlay, tab_ts, tab_raw = st.tabs(
-    ["Overview", "Trajectory", "Profile & Trend", "Overlay", "T-S", "Raw"])
+tab_over, tab_traj, tab_prof, tab_overlay, tab_ts, tab_cmp, tab_tech, tab_raw = \
+    st.tabs(["Overview", "Trajectory", "Profile & Trend", "Overlay", "T-S",
+             "Compare", "Tech", "Raw"])
 
 # ===================== Overview: metadata + sensors + calibration =====================
 with tab_over:
@@ -2621,3 +2919,150 @@ with tab_overlay:
                 st.caption(" · ".join(bits) + ". Lines are the mean over the selected "
                            "profiles, shaded to ±1 standard deviation; each measurand "
                            "keeps its own color and x-axis.")
+
+
+# ===================== Tech: engineering telemetry from <wmo>_tech.nc =====================
+with tab_tech:
+    st.caption("Engineering telemetry from the float's tech file: battery voltages, "
+               "pump activity and cycle timings, straight from the GDAC. Parameter "
+               "names vary by float model and DAC, so the list below is whatever "
+               "this float actually reports.")
+    _trel = f"dac/{frow.get('dac')}/{sel_wmo}/{sel_wmo}_tech.nc"
+    _tdest = os.path.join(ROOT, _trel)
+    if os.path.exists(_tdest) and os.path.getsize(_tdest) > 0:
+        _tst = "ok"
+    else:
+        with st.spinner("Fetching the tech file from the GDAC…"):
+            _tst = _gdac_get(_trel)
+    if _tst == "missing":
+        st.info("The GDAC has no tech file for this float.")
+    elif _tst == "unreachable":
+        st.warning("Couldn't reach the GDAC for the tech file. This looks like a "
+                   "connection problem; try again in a moment.")
+    else:
+        _tech = load_tech(_tdest)
+        if _tech is None or not len(_tech):
+            st.info("This float's tech file has no readable technical parameters.")
+        else:
+            _tc1, _tc2 = st.columns(2)
+            _tc1.metric("Technical parameters", f"{_tech['name'].nunique():,}")
+            _tc2.metric("Cycles covered",
+                        f"{int(_tech['cycle'].nunique()):,}")
+            _tnum = _tech[pd.notna(_tech["num"])]
+            _tnames = sorted(_tnum["name"].unique())
+            if not _tnames:
+                st.info("No numeric technical parameters to plot; the raw values "
+                        "are in the table below.")
+            else:
+                _bat = [n for n in _tnames
+                        if "VOLT" in n.upper() or "BATTER" in n.upper()]
+                if st.session_state.get("tech_param") not in _tnames:
+                    st.session_state["tech_param"] = _bat[0] if _bat else _tnames[0]
+                _tp = st.selectbox(
+                    "Technical parameter", _tnames, key="tech_param",
+                    help="Numeric parameters only. Battery voltages are the usual "
+                         "health check: a steady decline is normal ageing, a sharp "
+                         "drop is trouble.")
+                _tsub = _tnum[_tnum["name"] == _tp].sort_values("cycle")
+                _fig_t = go.Figure(go.Scatter(
+                    x=_tsub["cycle"], y=_tsub["num"], mode="lines+markers",
+                    line=dict(color=_chart_colors()[0]["Core"], width=2),
+                    marker=dict(size=5),
+                    hovertemplate="cycle %{x:.0f} · %{y}<extra></extra>"))
+                _fig_t.update_layout(height=340,
+                                     margin=dict(l=10, r=10, t=30, b=10),
+                                     xaxis_title="cycle", yaxis_title=_tp)
+                st.plotly_chart(_fig_t, width="stretch")
+            with st.expander("All technical parameters at the latest cycle"):
+                _lc = _tech["cycle"].max()
+                st.dataframe(
+                    _tech[_tech["cycle"] == _lc][["name", "value"]]
+                    .reset_index(drop=True),
+                    width="stretch", height=300)
+
+# ===================== Compare: median profiles across floats =====================
+with tab_cmp:
+    st.caption("Overlay this float against up to two others as median vertical "
+               "profiles of the parameter picked in **Profile & Trend** (same data "
+               "view). Each pressure level shows the float's median across all its "
+               "casts, so the comparison is climatological, not cast-by-cast.")
+    _cmp_in = st.text_input(
+        "Compare with WMO(s), comma separated", key="cmp_wmos",
+        placeholder="e.g. 5906635, 1902304",
+        help="One or two other floats, by WMO. Their profile files are fetched "
+             "from the GDAC on demand, so the first load of each one downloads "
+             "its file.")
+    if not param:
+        st.info("Pick a plottable parameter in the Profile & Trend tab first.")
+    elif _cmp_in.strip():
+        _cmp_wmos = [w.strip() for w in _cmp_in.split(",") if w.strip()][:2]
+
+        def _median_profile(ds_x):
+            # the frame's columns are literally "pres"/"value"; the returned names
+            # are the dataset variables, kept only for axis labels
+            if not (param in ds_x or f"{param}_ADJUSTED" in ds_x):
+                return None
+            d, _pc, _vc = param_long_frame(ds_x, param, adjusted, apply_qc)
+            if d is None or d.empty:
+                return None
+            d = d.assign(_pb=(d["pres"] // 10) * 10 + 5)
+            m = d.groupby("_pb")["value"].median().reset_index()
+            return m.rename(columns={"_pb": "pres", "value": "val"})
+
+        _mh_cmp = _chart_colors()[1]
+        _fig_c = go.Figure()
+        _cmp_notes = []
+        _mine = _median_profile(ds)
+        if _mine is not None:
+            _fig_c.add_trace(go.Scatter(
+                x=_mine["val"], y=_mine["pres"], mode="lines",
+                name=f"{sel_wmo} (this float)",
+                line=dict(color=_mh_cmp[0], width=2),
+                hovertemplate="%{x} at %{y} dbar<extra>" + str(sel_wmo) + "</extra>"))
+        else:
+            _cmp_notes.append(f"{sel_wmo}: no {param} data under the current view")
+        for _ci, _cw in enumerate(_cmp_wmos):
+            if _cw == str(sel_wmo):
+                continue
+            _crow = floats[floats["wmo"].astype(str) == _cw]
+            if not len(_crow):
+                _cmp_notes.append(f"{_cw}: not in the index")
+                continue
+            _crow = _crow.iloc[0]
+            _crel = _crow.get("sprof_path")
+            if not (isinstance(_crel, str) and _crel
+                    and os.path.exists(os.path.join(ROOT, _crel))):
+                _crel = _crow.get("expected_rel")
+                if not (isinstance(_crel, str) and _crel):
+                    _csuf = ("_Sprof.nc" if str(_crow.get("data_kind")) == "bgc"
+                             else "_prof.nc")
+                    _crel = f"dac/{_crow.get('dac')}/{_cw}/{_cw}{_csuf}"
+                with st.spinner(f"Fetching float {_cw} from the GDAC…"):
+                    if _gdac_get(_crel) != "ok":
+                        _cmp_notes.append(f"{_cw}: could not fetch its profile file")
+                        continue
+            _cds = load_sprof(os.path.join(ROOT, _crel))
+            _cm = _median_profile(_cds)
+            if _cm is None:
+                _cmp_notes.append(f"{_cw}: no {param} data under the current view")
+                continue
+            _fig_c.add_trace(go.Scatter(
+                x=_cm["val"], y=_cm["pres"], mode="lines", name=_cw,
+                line=dict(color=_mh_cmp[(_ci + 1) % len(_mh_cmp)], width=2),
+                hovertemplate="%{x} at %{y} dbar<extra>" + _cw + "</extra>"))
+        if _fig_c.data:
+            _fig_c.update_layout(
+                height=480, margin=dict(l=10, r=10, t=30, b=10),
+                xaxis_title=param, yaxis_title="pressure (dbar)",
+                yaxis_autorange="reversed",
+                legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+            st.plotly_chart(_fig_c, width="stretch")
+            st.caption("Median value per 10 dbar pressure bin across each float's "
+                       "full record. Floats from different regions or seasons will "
+                       "differ for perfectly good reasons; this view is for spotting "
+                       "sensor offsets and water-mass contrasts, not judging floats.")
+        for _n in _cmp_notes:
+            st.info(_n)
+    else:
+        st.info("Type one or two WMOs above to overlay their median profiles "
+                "against this float's.")
