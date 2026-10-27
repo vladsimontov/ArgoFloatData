@@ -839,6 +839,58 @@ def pi_directory(root):
     return labels, label_map
 
 
+# WOA23 reference climatology: slim parquets extracted by build_woa.py into
+# docs/api (shipped with the repo, so reading them is a local disk read)
+WOA_FILES = {"TEMP": "woa23_temperature.parquet",
+             "PSAL": "woa23_salinity.parquet",
+             "DOXY": "woa23_oxygen.parquet",
+             "AOU": "woa23_aou.parquet",
+             "NITRATE": "woa23_nitrate.parquet"}
+
+
+def _woa_path(param):
+    f = WOA_FILES.get(param)
+    if not f:
+        return None
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "docs", "api", f)
+    return p if os.path.exists(p) else None
+
+
+def woa_cell(lat, lon):
+    """Snap a position to its WOA 1-degree cell center."""
+    la = float(np.clip(np.floor(lat) + 0.5, -89.5, 89.5))
+    lo = ((float(lon) + 180.0) % 360.0) - 180.0
+    lo = float(np.clip(np.floor(lo) + 0.5, -179.5, 179.5))
+    return la, lo
+
+
+@st.cache_data(show_spinner=False)
+def woa_profile(param, cell_lat, cell_lon):
+    """WOA23 annual-mean profile at one 1-degree cell -> (depth, pres, val)
+    frame, or None. The parquet is sorted by lat/lon in modest row groups, so
+    the equality filters make this a point read, not a 2-million-row load.
+    Depth (m) becomes pressure (dbar) via TEOS-10 so the overlay shares the
+    float's y-axis."""
+    p = _woa_path(param)
+    if p is None:
+        return None
+    try:
+        df = pd.read_parquet(p, filters=[("lat", "==", cell_lat),
+                                         ("lon", "==", cell_lon)])
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    df = df.sort_values("depth").reset_index(drop=True)
+    try:
+        import gsw as _gsw
+        df["pres"] = _gsw.p_from_z(-df["depth"].to_numpy("float64"), cell_lat)
+    except Exception:
+        df["pres"] = df["depth"]   # dbar is within ~2% of meters anyway
+    return df
+
+
 @st.cache_data(show_spinner=False)
 def fleet_history(root, today):
     """Per-float launch/last timestamps plus type and platform model: the raw
@@ -1257,7 +1309,13 @@ def page_about():
     st.markdown(
         "Float data is fetched on demand from the Argo GDAC when you open a float, "
         "then cached. The GDAC is mutable (delayed-mode QC rewrites history), so "
-        "the index is refreshed daily; pin a DOI snapshot for publications.")
+        "the index is refreshed daily; pin a DOI snapshot for publications.\n\n"
+        "The climatology overlay uses the **World Ocean Atlas 2023** (annual "
+        "1-degree objectively analyzed means for temperature, salinity, oxygen, "
+        "AOU and nitrate), courtesy of "
+        "[NOAA NCEI](https://www.ncei.noaa.gov/access/world-ocean-atlas-2023/); "
+        "the extracted reference profiles are also served as parquet files under "
+        "this project's data API.")
     st.stop()
 
 
@@ -2797,6 +2855,16 @@ with tab_prof:
              "The parameter's actual data mode (R/A/D) is shown just below.")
     adjusted = view.startswith("Adjusted")
     apply_qc = view.startswith(("QC", "Adjusted"))
+    _woa_ok = param in WOA_FILES and _woa_path(param) is not None
+    woa_on = st.toggle(
+        "Overlay WOA23 climatology (annual mean at this float's position)",
+        key="woa_overlay", disabled=not _woa_ok,
+        help="World Ocean Atlas 2023 (NOAA NCEI): the long-term mean profile "
+             "for the 1-degree cell at this float's median position, as a "
+             "dashed reference line. A climatology is a decades-long mean, so "
+             "an offset is not by itself a sensor problem."
+             + ("" if _woa_ok else " Available for TEMP, PSAL, DOXY, AOU and "
+                                   "NITRATE.")) and _woa_ok
 
     if param:
         df, pcol, vcol = param_long_frame(ds, param, adjusted, apply_qc)
@@ -2835,11 +2903,39 @@ with tab_prof:
                 x=df["value"], y=df["pres"], mode="markers",
                 marker=dict(size=4, color=cvals, colorscale="Viridis", colorbar=cbar),
                 customdata=cdata, hovertemplate=hover))
+            _woa_note = None
+            if woa_on:
+                _fla = (np.asarray(ds["LATITUDE"].values).ravel()
+                        if "LATITUDE" in ds else np.array([]))
+                _flo = (np.asarray(ds["LONGITUDE"].values).ravel()
+                        if "LONGITUDE" in ds else np.array([]))
+                _fin = np.isfinite(_fla) & np.isfinite(_flo)
+                if _fin.any():
+                    _wla, _wlo = woa_cell(float(np.median(_fla[_fin])),
+                                          float(np.median(_flo[_fin])))
+                    _wp = woa_profile(param, _wla, _wlo)
+                    if _wp is not None and len(_wp):
+                        fig.add_trace(go.Scatter(
+                            x=_wp["val"], y=_wp["pres"], mode="lines",
+                            name="WOA23", showlegend=False,
+                            line=dict(color="#808A95", width=2.5, dash="dash"),
+                            hovertemplate="%{x:.4g} at %{y:.0f} dbar"
+                                          "<extra>WOA23 climatology</extra>"))
+                        _woa_note = (
+                            f"Dashed gray: WOA23 annual climatology (1° cell at "
+                            f"{_wla:.1f}, {_wlo:.1f}), NOAA NCEI. A decades-long "
+                            "mean, so offsets include real variability and "
+                            "trends, not just sensor error.")
+                    else:
+                        _woa_note = ("No WOA23 climatology at this float's grid "
+                                     "cell.")
             fig.update_xaxes(title=vlabel)
             fig.update_yaxes(autorange="reversed", title=plabel)   # depth downward
             fig.update_layout(height=560)
             _titled(fig, f"{float_tag} · {param} profile")
             st.plotly_chart(fig, width="stretch")
+            if _woa_note:
+                st.caption(_woa_note)
 
             d1, d2 = st.columns(2)
             d1.download_button("Download this parameter (CSV)",
