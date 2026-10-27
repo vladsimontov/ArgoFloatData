@@ -839,6 +839,50 @@ def pi_directory(root):
     return labels, label_map
 
 
+@st.cache_data(show_spinner=False)
+def pi_activity(root, days, today):
+    """Active floats per person and per program, split by float type: the
+    'who runs the fleet' view. People come from pi_directory, so spelling
+    variants collapse; a team float credits every named PI, so per-person
+    counts overlap by design. Returns (by_person, by_program) frames indexed
+    by name with one column per float type."""
+    _s, fl = load_tables(root)
+    empty = pd.DataFrame()
+    if fl is None or not {"pi_name", "last_date"}.issubset(fl.columns):
+        return empty, empty
+    age = (pd.Timestamp(today)
+           - pd.to_datetime(fl["last_date"].map(parse_argo_date),
+                            errors="coerce")).dt.days
+    sub = fl[age.le(days).fillna(False)].copy()
+    if not len(sub):
+        return empty, empty
+    base = (sub["data_kind"].astype(str).map({"bgc": "BGC", "core": "Core"})
+            if "data_kind" in sub.columns
+            else pd.Series(index=sub.index, dtype=object)).fillna("-")
+    deep = (sub["is_deep"].fillna(False).astype(bool)
+            if "is_deep" in sub.columns else pd.Series(False, index=sub.index))
+    sub["type"] = base.where(~deep, base + " · Deep")
+    _labels, _groups = pi_directory(root)
+    raw2people = {}
+    for _lbl, _raws in _groups.items():
+        for _rv in _raws:
+            raw2people.setdefault(_rv, []).append(_lbl)
+    ppl = (sub.assign(person=sub["pi_name"].fillna("").astype(str).str.strip()
+                      .map(raw2people))
+           .explode("person").dropna(subset=["person"]))
+    by_pi = (ppl.groupby(["person", "type"])["wmo"].nunique()
+             .unstack(fill_value=0))
+    if "project_name" in sub.columns:
+        proj = sub.assign(project=sub["project_name"].fillna("").astype(str)
+                          .str.strip())
+        proj = proj[proj["project"] != ""]
+        by_proj = (proj.groupby(["project", "type"])["wmo"].nunique()
+                   .unstack(fill_value=0))
+    else:
+        by_proj = empty
+    return by_pi, by_proj
+
+
 # WOA23 reference climatology: slim parquets extracted by build_woa.py into
 # docs/api (shipped with the repo, so reading them is a local disk read)
 WOA_FILES = {"TEMP": "woa23_temperature.parquet",
@@ -1289,6 +1333,39 @@ def page_fleet():
                      for _t in _ftypes}, index=_months.strftime("%Y-%m"))
                 t2.markdown("**Reporting floats by month**")
                 t2.dataframe(_active_tbl.iloc[::-1], width="stretch", height=240)
+
+            st.subheader("Who runs the fleet")
+            _by_pi, _by_proj = pi_activity(
+                ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
+
+            def _top_bar(bt, col, title, n=10):
+                if bt is None or not len(bt):
+                    col.info("No attribution data in the index.")
+                    return
+                bt = (bt.assign(_tot=bt.sum(axis=1)).sort_values("_tot")
+                      .drop(columns="_tot").tail(n))
+                _figp = go.Figure()
+                for _t in [c for c in TYPE_COLORS if c in bt.columns]:
+                    _figp.add_trace(go.Bar(
+                        y=bt.index, x=bt[_t], name=_t, orientation="h",
+                        marker_color=_th[_t],
+                        hovertemplate="%{y} · %{x:,} active<extra>" + _t
+                                      + "</extra>"))
+                _figp.update_layout(
+                    barmode="stack", height=440,
+                    margin=dict(l=10, r=10, t=60, b=10),
+                    xaxis_title="active floats",
+                    legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+                col.markdown(f"**{title}**")
+                col.plotly_chart(_figp, width="stretch")
+
+            p1, p2 = st.columns(2)
+            _top_bar(_by_pi, p1, "Most active principal investigators")
+            _top_bar(_by_proj, p2, "Biggest programs right now")
+            st.caption(f"Floats reporting within {ACTIVE_DAYS} days, split by "
+                       "float type. A float run by a team credits every named "
+                       "PI, so PI counts can overlap; spelling variants are "
+                       "grouped into people the same way as the search filter.")
     st.stop()
 
 
@@ -2934,8 +3011,12 @@ with tab_prof:
             fig.update_layout(height=560)
             _titled(fig, f"{float_tag} · {param} profile")
             st.plotly_chart(fig, width="stretch")
+            # a permanent slot, filled or left blank: st.tabs resets to the first
+            # tab whenever a tab's element COUNT changes between reruns, so the
+            # caption must occupy its node whether or not the overlay is on
+            _woa_slot = st.empty()
             if _woa_note:
-                st.caption(_woa_note)
+                _woa_slot.caption(_woa_note)
 
             d1, d2 = st.columns(2)
             d1.download_button("Download this parameter (CSV)",
