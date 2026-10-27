@@ -2976,11 +2976,7 @@ with tab_prof:
                 cbar = dict(title="cycle")
                 hover = (f"{vcol}=%{{x:.4g}}<br>{pcol}=%{{y:.1f}} dbar"
                          "<br>cycle %{customdata}<extra></extra>")
-            fig = go.Figure(go.Scattergl(
-                x=df["value"], y=df["pres"], mode="markers",
-                marker=dict(size=4, color=cvals, colorscale="Viridis", colorbar=cbar),
-                customdata=cdata, hovertemplate=hover))
-            _woa_note = None
+            _woa_note, _wp = None, None
             if woa_on:
                 _fla = (np.asarray(ds["LATITUDE"].values).ravel()
                         if "LATITUDE" in ds else np.array([]))
@@ -2992,22 +2988,75 @@ with tab_prof:
                                           float(np.median(_flo[_fin])))
                     _wp = woa_profile(param, _wla, _wlo)
                     if _wp is not None and len(_wp):
-                        fig.add_trace(go.Scatter(
-                            x=_wp["val"], y=_wp["pres"], mode="lines",
-                            name="WOA23", showlegend=False,
-                            line=dict(color="#808A95", width=2.5, dash="dash"),
-                            hovertemplate="%{x:.4g} at %{y:.0f} dbar"
-                                          "<extra>WOA23 climatology</extra>"))
                         _woa_note = (
                             f"Dashed gray: WOA23 annual climatology (1° cell at "
                             f"{_wla:.1f}, {_wlo:.1f}), NOAA NCEI. A decades-long "
                             "mean, so offsets include real variability and "
                             "trends, not just sensor error.")
                     else:
+                        _wp = None
                         _woa_note = ("No WOA23 climatology at this float's grid "
                                      "cell.")
-            fig.update_xaxes(title=vlabel)
-            fig.update_yaxes(autorange="reversed", title=plabel)   # depth downward
+            _main = go.Scattergl(
+                x=df["value"], y=df["pres"], mode="markers",
+                marker=dict(size=4, color=cvals, colorscale="Viridis",
+                            colorbar=cbar),
+                customdata=cdata, hovertemplate=hover)
+            if _wp is not None:
+                # profile and residual panels share one reversed pressure axis;
+                # it stays ONE chart element either way, so the tab's structure
+                # is stable and st.tabs keeps its selection
+                fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
+                                    column_widths=[0.62, 0.38],
+                                    horizontal_spacing=0.05)
+                fig.add_trace(_main, row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=_wp["val"], y=_wp["pres"], mode="lines", name="WOA23",
+                    showlegend=False,
+                    line=dict(color="#808A95", width=2.5, dash="dash"),
+                    hovertemplate="%{x:.4g} at %{y:.0f} dbar"
+                                  "<extra>WOA23 climatology</extra>"),
+                    row=1, col=1)
+                _pn = df["pres"].to_numpy("float64")
+                _wf = np.interp(_pn, _wp["pres"].to_numpy("float64"),
+                                _wp["val"].to_numpy("float64"),
+                                left=np.nan, right=np.nan)
+                _res = df["value"].to_numpy("float64") - _wf
+                _okr = np.isfinite(_res)
+                fig.add_trace(go.Scattergl(
+                    x=_res[_okr], y=_pn[_okr], mode="markers",
+                    marker=dict(size=4, color=np.asarray(cvals)[_okr],
+                                colorscale="Viridis", showscale=False),
+                    customdata=np.asarray(cdata)[_okr],
+                    hovertemplate="Δ %{x:.4g}<br>%{y:.1f} dbar<br>%{customdata}"
+                                  "<extra>float minus WOA23</extra>"),
+                    row=1, col=2)
+                if _okr.any():
+                    _rb = (pd.DataFrame({"p": (_pn[_okr] // 50) * 50 + 25,
+                                         "r": _res[_okr]})
+                           .groupby("p")["r"].median())
+                    fig.add_trace(go.Scatter(
+                        x=_rb.values, y=_rb.index, mode="lines",
+                        showlegend=False,
+                        line=dict(color="#808A95", width=2),
+                        hovertemplate="median Δ %{x:.4g} at %{y:.0f} dbar"
+                                      "<extra></extra>"), row=1, col=2)
+                    _med = float(np.nanmedian(_res[_okr]))
+                    _q1, _q3 = np.nanpercentile(_res[_okr], [25, 75])
+                    _woa_note += (f" Residuals (right panel, float minus WOA23): "
+                                  f"median {_med:+.3g}, middle half {_q1:+.3g} "
+                                  f"to {_q3:+.3g}, {int(_okr.sum()):,} samples "
+                                  "within the WOA depth range.")
+                fig.add_vline(x=0, row=1, col=2, line_color="#808A95",
+                              line_dash="dot", line_width=1)
+                fig.update_xaxes(title_text=vlabel, row=1, col=1)
+                fig.update_xaxes(title_text="float minus WOA23", row=1, col=2)
+                fig.update_yaxes(autorange="reversed")   # depth downward, both
+                fig.update_yaxes(title_text=plabel, row=1, col=1)
+            else:
+                fig = go.Figure(_main)
+                fig.update_xaxes(title=vlabel)
+                fig.update_yaxes(autorange="reversed", title=plabel)
             fig.update_layout(height=560)
             _titled(fig, f"{float_tag} · {param} profile")
             st.plotly_chart(fig, width="stretch")
