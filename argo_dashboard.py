@@ -935,6 +935,47 @@ def woa_profile(param, cell_lat, cell_lon):
     return df
 
 
+GLODAP_COLS = {"TEMP": "temp", "PSAL": "psal", "DOXY": "doxy",
+               "AOU": "aou", "NITRATE": "nitrate"}
+
+
+def _glodap_path():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "docs", "api", "glodap_v2_2023.parquet")
+    return p if os.path.exists(p) else None
+
+
+@st.cache_data(show_spinner=False)
+def glodap_near(param, lat, lon, radius_km=100.0):
+    """GLODAP v2.2023 bottle samples of `param` within radius_km of a point:
+    (pres, val, year, km) frame or None. A latitude-band predicate read keeps
+    it a slice of the parquet; the exact great-circle cut happens in memory."""
+    p = _glodap_path()
+    col = GLODAP_COLS.get(param)
+    if p is None or col is None:
+        return None
+    dlat = radius_km / 111.0 + 0.01
+    try:
+        gdf = pd.read_parquet(
+            p, columns=["lat", "lon", "year", "pres", col],
+            filters=[("lat", ">=", lat - dlat), ("lat", "<=", lat + dlat)])
+    except Exception:
+        return None
+    if gdf is None or gdf.empty:
+        return None
+    gdf = gdf.dropna(subset=[col])
+    if not len(gdf):
+        return None
+    gdf = gdf.assign(km=haversine_km(lat, lon,
+                                     gdf["lat"].to_numpy("float64"),
+                                     gdf["lon"].to_numpy("float64")))
+    gdf = gdf[gdf["km"] <= radius_km]
+    if not len(gdf):
+        return None
+    return (gdf.rename(columns={col: "val"})[["pres", "val", "year", "km"]]
+            .sort_values("pres").reset_index(drop=True))
+
+
 @st.cache_data(show_spinner=False)
 def fleet_history(root, today):
     """Per-float launch/last timestamps plus type and platform model: the raw
@@ -1393,7 +1434,11 @@ def page_about():
         "AOU and nitrate), courtesy of "
         "[NOAA NCEI](https://www.ncei.noaa.gov/access/world-ocean-atlas-2023/); "
         "the extracted reference profiles are also served as parquet files under "
-        "this project's data API.")
+        "this project's data API.\n\n"
+        "Bottle-sample overlays use **GLODAPv2.2023** (Lauvset et al. 2024, "
+        "[ESSD 16, 2047-2072](https://doi.org/10.5194/essd-16-2047-2024)), "
+        "courtesy of the GLODAP group and NOAA NCEI; the slimmed bottle table "
+        "is likewise served under this project's data API.")
     st.stop()
 
 
@@ -2739,7 +2784,7 @@ _ftab = st.segmented_control("View", _FTABS, key="float_tab",
                              label_visibility="collapsed") or _FTABS[0]
 # keyed widgets inside a section lose their state while the section is not
 # rendered; touching the keys each run keeps the choices alive across switches
-for _keep in ("param_pick", "woa_overlay", "tech_param",
+for _keep in ("param_pick", "woa_overlay", "glodap_overlay", "tech_param",
               "raw_mode", "deseason", "data_view"):
     if _keep in st.session_state:
         st.session_state[_keep] = st.session_state[_keep]
@@ -2961,6 +3006,16 @@ if _ftab == "Profile & Trend":
              "an offset is not by itself a sensor problem."
              + ("" if _woa_ok else " Available for TEMP, PSAL, DOXY, AOU and "
                                    "NITRATE.")) and _woa_ok
+    _glo_ok = param in GLODAP_COLS and _glodap_path() is not None
+    glodap_on = st.toggle(
+        "Overlay GLODAP bottle samples (research cruises within 100 km)",
+        key="glodap_overlay", disabled=not _glo_ok,
+        help="Real quality-controlled bottle measurements from the GLODAP "
+             "v2.2023 cruise synthesis, taken within 100 km of this float's "
+             "median position. Bottles from other years differ for real "
+             "reasons (seasons, eddies, trends), not only sensor error."
+             + ("" if _glo_ok else " Available for TEMP, PSAL, DOXY, AOU and "
+                                   "NITRATE.")) and _glo_ok
 
     if param:
         df, pcol, vcol = param_long_frame(ds, param, adjusted, apply_qc)
@@ -2996,15 +3051,20 @@ if _ftab == "Profile & Trend":
                 hover = (f"{vcol}=%{{x:.4g}}<br>{pcol}=%{{y:.1f}} dbar"
                          "<br>cycle %{customdata}<extra></extra>")
             _woa_note, _wp = None, None
+            _fla = (np.asarray(ds["LATITUDE"].values).ravel()
+                    if "LATITUDE" in ds else np.array([]))
+            _flo = (np.asarray(ds["LONGITUDE"].values).ravel()
+                    if "LONGITUDE" in ds else np.array([]))
+            _fin = np.isfinite(_fla) & np.isfinite(_flo)
+            _mpos = ((float(np.median(_fla[_fin])),
+                      float(np.median(_flo[_fin]))) if _fin.any() else None)
+            _thm = getattr(getattr(st, "context", None), "theme", None)
+            _ref = ("#C7CFD8" if (_thm is not None
+                                  and getattr(_thm, "type", "") == "dark")
+                    else "#3D4852")
             if woa_on:
-                _fla = (np.asarray(ds["LATITUDE"].values).ravel()
-                        if "LATITUDE" in ds else np.array([]))
-                _flo = (np.asarray(ds["LONGITUDE"].values).ravel()
-                        if "LONGITUDE" in ds else np.array([]))
-                _fin = np.isfinite(_fla) & np.isfinite(_flo)
-                if _fin.any():
-                    _wla, _wlo = woa_cell(float(np.median(_fla[_fin])),
-                                          float(np.median(_flo[_fin])))
+                if _mpos is not None:
+                    _wla, _wlo = woa_cell(*_mpos)
                     _wp = woa_profile(param, _wla, _wlo)
                     if _wp is not None and len(_wp):
                         _woa_note = (
@@ -3029,12 +3089,6 @@ if _ftab == "Profile & Trend":
                 fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
                                     column_widths=[0.62, 0.38],
                                     horizontal_spacing=0.05)
-                # reference ink that stands out over the bright scatter in
-                # either theme: dark slate on light surfaces, pale on dark ones
-                _thm = getattr(getattr(st, "context", None), "theme", None)
-                _ref = ("#C7CFD8" if (_thm is not None
-                                      and getattr(_thm, "type", "") == "dark")
-                        else "#3D4852")
                 # climatological spread: +-1 sd of the observations behind the
                 # mean, shaded under everything else in both panels
                 _wb = (_wp.dropna(subset=["sd"])
@@ -3165,13 +3219,57 @@ if _ftab == "Profile & Trend":
                 fig = go.Figure(_main)
                 fig.update_xaxes(title=vlabel)
                 fig.update_yaxes(autorange="reversed", title=plabel)
+            _glo_note, _gl = None, None
+            if glodap_on and _mpos is not None:
+                _gl = glodap_near(param, _mpos[0], _mpos[1], 100.0)
+                if _gl is None:
+                    _glo_note = (f"No GLODAP bottle samples with good {param} "
+                                 "within 100 km of this float's median position.")
+            if _gl is not None:
+                _bt = go.Scattergl(
+                    x=_gl["val"], y=_gl["pres"], mode="markers",
+                    name="Bottle samples (GLODAP)", legendgroup="bottles",
+                    marker=dict(symbol="x", size=6, color=_ref),
+                    customdata=np.stack([_gl["year"].to_numpy("float64"),
+                                         _gl["km"].to_numpy("float64")], axis=1),
+                    hovertemplate="%{x:.4g} at %{y:.0f} dbar<br>cruise year "
+                                  "%{customdata[0]:.0f} · %{customdata[1]:.0f} "
+                                  "km away<extra>GLODAP bottle</extra>")
+                if _wp is not None:
+                    fig.add_trace(_bt, row=1, col=1)
+                else:
+                    fig.add_trace(_bt)
+                # float minus bottle at matching depths, via the float's median
+                # profile per 20 dbar bin
+                _fm = (df.assign(_pb=(df["pres"] // 20) * 20 + 10)
+                       .groupby("_pb")["value"].median())
+                if len(_fm) > 1:
+                    _fi = np.interp(_gl["pres"].to_numpy("float64"),
+                                    _fm.index.to_numpy("float64"),
+                                    _fm.to_numpy("float64"),
+                                    left=np.nan, right=np.nan)
+                    _gr = _fi - _gl["val"].to_numpy("float64")
+                    _gok = np.isfinite(_gr)
+                    if _gok.any():
+                        _glo_note = (
+                            f"{len(_gl):,} GLODAP bottle samples within 100 km "
+                            f"({int(_gl['year'].min())} to "
+                            f"{int(_gl['year'].max())}). Float minus bottle at "
+                            "matching depths: median "
+                            f"{float(np.nanmedian(_gr[_gok])):+.3g}. Bottles "
+                            "from other years differ for real reasons (seasons, "
+                            "eddies, trends), not only sensor error. Cite "
+                            "GLODAPv2.2023 (Lauvset et al. 2024).")
             if _wp is not None:
                 fig.update_layout(
                     height=600, showlegend=True,
                     margin=dict(b=80),
                     legend=dict(orientation="h", y=-0.12, yanchor="top"))
             else:
-                fig.update_layout(height=560, showlegend=False)
+                fig.update_layout(
+                    height=600 if _gl is not None else 560,
+                    showlegend=_gl is not None, margin=dict(b=80),
+                    legend=dict(orientation="h", y=-0.12, yanchor="top"))
             _titled(fig, f"{float_tag} · {param} profile")
             st.plotly_chart(fig, width="stretch")
             # a permanent slot, filled or left blank: st.tabs resets to the first
@@ -3180,6 +3278,8 @@ if _ftab == "Profile & Trend":
             _woa_slot = st.empty()
             if _woa_note:
                 _woa_slot.caption(_woa_note)
+            if _glo_note:
+                st.caption(_glo_note)
 
             d1, d2 = st.columns(2)
             d1.download_button("Download this parameter (CSV)",
