@@ -957,7 +957,7 @@ def glodap_near(param, lat, lon, radius_km=100.0):
     dlat = radius_km / 111.0 + 0.01
     try:
         gdf = pd.read_parquet(
-            p, columns=["lat", "lon", "year", "pres", col],
+            p, columns=["lat", "lon", "year", "month", "pres", col],
             filters=[("lat", ">=", lat - dlat), ("lat", "<=", lat + dlat)])
     except Exception:
         return None
@@ -972,7 +972,8 @@ def glodap_near(param, lat, lon, radius_km=100.0):
     gdf = gdf[gdf["km"] <= radius_km]
     if not len(gdf):
         return None
-    return (gdf.rename(columns={col: "val"})[["pres", "val", "year", "km"]]
+    return (gdf.rename(columns={col: "val"})
+            [["pres", "val", "year", "month", "km"]]
             .sort_values("pres").reset_index(drop=True))
 
 
@@ -3025,7 +3026,15 @@ if _ftab == "Profile & Trend":
     if not param:
         st.info("No plottable parameters for this float.")
     else:
-        st.caption(f"Data mode for {param}: {data_mode_for(ds, param)}")
+        _errv = f"{param}_ADJUSTED_ERROR"
+        _err_txt = ""
+        if adjusted and _errv in ds:
+            _ev = np.asarray(ds[_errv].values, dtype="float64")
+            if np.isfinite(_ev).any():
+                _err_txt = (" · median reported adjusted-value uncertainty "
+                            f"{float(np.nanmedian(_ev)):.3g}")
+        st.caption(f"Data mode for {param}: {data_mode_for(ds, param)}"
+                   f"{_err_txt}")
         if df.empty:
             st.warning("No finite points after selection. Try a different **Data view**, "
                        "since this parameter may only exist as real-time values (no "
@@ -3251,15 +3260,23 @@ if _ftab == "Profile & Trend":
                     _gr = _fi - _gl["val"].to_numpy("float64")
                     _gok = np.isfinite(_gr)
                     if _gok.any():
+                        _dp15 = _gok & (_gl["pres"].to_numpy("float64") >= 1500)
+                        _deep_txt = (
+                            f" Deep crossover (at or below 1500 dbar): median "
+                            f"{float(np.nanmedian(_gr[_dp15])):+.3g} over "
+                            f"{int(_dp15.sum())} bottles; deep water varies "
+                            "little, so this is the bias check DMQC trusts most."
+                            if _dp15.any() else "")
                         _glo_note = (
                             f"{len(_gl):,} GLODAP bottle samples within 100 km "
                             f"({int(_gl['year'].min())} to "
                             f"{int(_gl['year'].max())}). Float minus bottle at "
                             "matching depths: median "
-                            f"{float(np.nanmedian(_gr[_gok])):+.3g}. Bottles "
-                            "from other years differ for real reasons (seasons, "
-                            "eddies, trends), not only sensor error. Cite "
-                            "GLODAPv2.2023 (Lauvset et al. 2024).")
+                            f"{float(np.nanmedian(_gr[_gok])):+.3g}."
+                            + _deep_txt +
+                            " Bottles from other years differ for real reasons "
+                            "(seasons, eddies, trends), not only sensor error. "
+                            "Cite GLODAPv2.2023 (Lauvset et al. 2024).")
             if _wp is not None:
                 fig.update_layout(
                     height=600, showlegend=True,
@@ -3291,6 +3308,77 @@ if _ftab == "Profile & Trend":
             d2.download_button("Download full float (NetCDF)", _orig_bytes,
                                file_name=os.path.basename(_orig_path),
                                mime="application/x-netcdf")
+            if _wp is not None or _gl is not None:
+                _fd = df.copy()
+                _fd["source"] = "float"
+                if _wp is not None:
+                    _fw = np.interp(df["pres"].to_numpy("float64"),
+                                    _wp["pres"].to_numpy("float64"),
+                                    _wp["val"].to_numpy("float64"),
+                                    left=np.nan, right=np.nan)
+                    _fd["woa23_val"] = _fw
+                    _fd["minus_woa23"] = _fd["value"] - _fw
+                _parts = [_fd]
+                if _gl is not None:
+                    _gd = _gl.rename(columns={"val": "value"}).copy()
+                    _gd["source"] = "glodap_bottle"
+                    _fmed = (df.assign(_pb=(df["pres"] // 20) * 20 + 10)
+                             .groupby("_pb")["value"].median())
+                    if len(_fmed) > 1:
+                        _gd["float_median_at_pres"] = np.interp(
+                            _gd["pres"].to_numpy("float64"),
+                            _fmed.index.to_numpy("float64"),
+                            _fmed.to_numpy("float64"),
+                            left=np.nan, right=np.nan)
+                        _gd["float_minus_bottle"] = (
+                            _gd["float_median_at_pres"] - _gd["value"])
+                    _parts.append(_gd)
+                _cmp = pd.concat(_parts, ignore_index=True)
+                _hdr = (
+                    "# argofloat.streamlit.app comparison export\n"
+                    f"# float WMO {sel_wmo} · parameter {param} · data view "
+                    f"{view}\n"
+                    "# float data: Argo GDAC (doi:10.17882/42182; cite a dated "
+                    "snapshot DOI in publications), index synced "
+                    f"{mani.get('synced_utc', '?')}\n"
+                    + ("# WOA23: NOAA NCEI World Ocean Atlas 2023, 1-degree "
+                       "annual analyzed mean at the float's cell\n"
+                       if _wp is not None else "")
+                    + ("# GLODAP: GLODAPv2.2023 (doi:10.5194/essd-16-2047-2024)"
+                       ", flag-2 bottles within 100 km of the float's median "
+                       "position; float_minus_bottle uses the float's 20 dbar "
+                       "median profile\n" if _gl is not None else ""))
+                d1.download_button(
+                    "Download comparison (CSV)",
+                    (_hdr + _cmp.to_csv(index=False)).encode(),
+                    file_name=f"{sel_wmo}_{param}_comparison.csv",
+                    mime="text/csv", key="cmp_csv_dl",
+                    help="Exactly what the figure shows: float samples plus the "
+                         "matched reference values and residuals, with the "
+                         "method recorded in the header lines.")
+                with st.expander("Cite this view (for papers)"):
+                    _cites = [
+                        "Argo (2026). Argo float data and metadata from Global "
+                        "Data Assembly Centre (Argo GDAC). SEANOE. "
+                        "https://doi.org/10.17882/42182 · cite a dated snapshot "
+                        "DOI; this view used the index synced "
+                        f"{mani.get('synced_utc', '?')}"]
+                    if _wp is not None:
+                        _cites.append(
+                            "World Ocean Atlas 2023. NOAA National Centers for "
+                            "Environmental Information. "
+                            "https://www.ncei.noaa.gov/access/"
+                            "world-ocean-atlas-2023/")
+                    if _gl is not None:
+                        _cites.append(
+                            "Lauvset, S. K., et al. (2024). GLODAPv2.2023: the "
+                            "latest version of the global interior ocean "
+                            "biogeochemical data product. Earth Syst. Sci. Data "
+                            "16, 2047-2072. "
+                            "https://doi.org/10.5194/essd-16-2047-2024")
+                    _cites.append("View: https://argofloat.streamlit.app/"
+                                  f"?wmo={sel_wmo}&var={param}")
+                    st.code("\n\n".join(_cites), language=None)
 
 # ======== Profile & Trend (cont.): depth-time section (measurand-driven) ========
 if _ftab == "Profile & Trend":          # re-enter to append the section, after the profile, before the trend
@@ -3455,11 +3543,42 @@ if _ftab == "Profile & Trend":          # re-enter to append the trend to the Pr
                     x=near["time"], y=sen * t_years + inter, mode="lines",
                     line=dict(color="black", width=2, dash="dash"),
                     name=f"Sen slope {sen:+.3g}/yr"))
+            _glb = None
+            if glodap_on and not deseason and _gl is not None:
+                _glb = _gl[(_gl["pres"] - target_p).abs() <= max_gap]
+                if len(_glb):
+                    _gbt = pd.to_datetime(dict(
+                        year=_glb["year"],
+                        month=_glb["month"].clip(lower=1, upper=12),
+                        day=15), errors="coerce")
+                    fig_ts.add_trace(go.Scatter(
+                        x=_gbt, y=_glb["val"], mode="markers",
+                        name="GLODAP bottles",
+                        marker=dict(symbol="x", size=7, color=_ref),
+                        customdata=np.stack(
+                            [_glb["pres"].to_numpy("float64"),
+                             _glb["km"].to_numpy("float64")], axis=1),
+                        hovertemplate=(f"{param}=%{{y:.3g}}<br>"
+                                       "time=%{x|%Y-%m}<br>"
+                                       "pres=%{customdata[0]:.0f} dbar · "
+                                       "%{customdata[1]:.0f} km away"
+                                       "<extra>GLODAP bottle</extra>")))
             fig_ts.update_layout(height=460, xaxis_title="time",
                                  yaxis_title=ylab, legend_title="season",
                                  margin=dict(l=0, r=0, t=10, b=0))
             _titled(fig_ts, f"{float_tag} · {param} at {target_p:g} dbar")
             st.plotly_chart(fig_ts, width="stretch")
+            if _glb is not None and len(_glb):
+                st.caption(f"x marks: {len(_glb):,} GLODAP bottle samples within "
+                           f"100 km and {max_gap:g} dbar of the target level "
+                           f"({int(_glb['year'].min())} to "
+                           f"{int(_glb['year'].max())}): the historical record "
+                           "this float extends. Bottles are context only; the "
+                           "Sen trend is fit to the float alone.")
+            elif glodap_on and deseason and _gl is not None:
+                st.caption("GLODAP bottles are hidden while deseasonalize is on, "
+                           "since the float's short record cannot deseasonalize "
+                           "decades-old samples honestly.")
 
             if res and np.isfinite(res["sen"]):
                 p = res["p"]
