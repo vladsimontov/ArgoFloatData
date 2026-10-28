@@ -3143,9 +3143,23 @@ if _ftab == "Profile & Trend":
                                   "grid cell, so no uncertainty band is shown.")
                 fig.add_vline(x=0, row=1, col=2, line_color="#808A95",
                               line_dash="dot", line_width=1)
-                fig.update_xaxes(title_text=vlabel, row=1, col=1)
+                # axes pinned to the FLOAT's extent, so legend-toggling the WOA
+                # family never rescales the view; envelope beyond it clips, and
+                # panning or zooming out still reaches it
+                _xv = df["value"].to_numpy("float64")
+                _xlo, _xhi = float(np.nanmin(_xv)), float(np.nanmax(_xv))
+                _xpad = 0.05 * ((_xhi - _xlo) or 1.0)
+                fig.update_xaxes(range=[_xlo - _xpad, _xhi + _xpad],
+                                 title_text=vlabel, row=1, col=1)
+                if _okr.any():
+                    _rlo = min(float(np.nanmin(_res[_okr])), 0.0)
+                    _rhi = max(float(np.nanmax(_res[_okr])), 0.0)
+                    _rpad = 0.05 * ((_rhi - _rlo) or 1.0)
+                    fig.update_xaxes(range=[_rlo - _rpad, _rhi + _rpad],
+                                     row=1, col=2)
                 fig.update_xaxes(title_text="float minus WOA23", row=1, col=2)
-                fig.update_yaxes(autorange="reversed")   # depth downward, both
+                _phi = float(np.nanmax(_pn))
+                fig.update_yaxes(range=[_phi * 1.03, 0])   # depth downward, both
                 fig.update_yaxes(title_text=plabel, row=1, col=1)
             else:
                 fig = go.Figure(_main)
