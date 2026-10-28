@@ -3028,6 +3028,12 @@ if _ftab == "Profile & Trend":
                 fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
                                     column_widths=[0.62, 0.38],
                                     horizontal_spacing=0.05)
+                # reference ink that stands out over the bright scatter in
+                # either theme: dark slate on light surfaces, pale on dark ones
+                _thm = getattr(getattr(st, "context", None), "theme", None)
+                _ref = ("#C7CFD8" if (_thm is not None
+                                      and getattr(_thm, "type", "") == "dark")
+                        else "#3D4852")
                 # climatological spread: +-1 sd of the observations behind the
                 # mean, shaded under everything else in both panels
                 _wb = (_wp.dropna(subset=["sd"])
@@ -3036,29 +3042,40 @@ if _ftab == "Profile & Trend":
                 if _has_sd:
                     fig.add_trace(go.Scatter(
                         x=_wb["val"] - _wb["sd"], y=_wb["pres"], mode="lines",
-                        line=dict(width=1, color="rgba(128,138,149,0.55)"), hoverinfo="skip", showlegend=False),
+                        line=dict(width=0), hoverinfo="skip", showlegend=False),
                         row=1, col=1)
                     fig.add_trace(go.Scatter(
                         x=_wb["val"] + _wb["sd"], y=_wb["pres"], mode="lines",
-                        line=dict(width=1, color="rgba(128,138,149,0.55)"), fill="tonextx",
+                        line=dict(width=0), fill="tonextx",
                         fillcolor="rgba(128,138,149,0.25)",
                         hoverinfo="skip", showlegend=False), row=1, col=1)
                 fig.add_trace(_main, row=1, col=1)
                 fig.add_trace(go.Scatter(
                     x=_wp["val"], y=_wp["pres"], mode="lines", name="WOA23",
                     showlegend=False,
-                    line=dict(color="#808A95", width=2.5, dash="dash"),
+                    line=dict(color=_ref, width=3, dash="dash"),
                     hovertemplate="%{x:.4g} at %{y:.0f} dbar"
                                   "<extra>WOA23 climatology</extra>"),
                     row=1, col=1)
                 if _has_sd:
+                    # envelope edges over the scatter, so the band reads even
+                    # where the data cloud covers the fill
+                    for _sgn, _tag in ((-1, "-1 sd"), (1, "+1 sd")):
+                        fig.add_trace(go.Scatter(
+                            x=_wb["val"] + _sgn * _wb["sd"],
+                            y=_wb["pres"], mode="lines", showlegend=False,
+                            line=dict(color=_ref, width=2.4, dash="dot"),
+                            hovertemplate="%{x:.4g} at %{y:.0f} dbar<extra>"
+                                          "WOA23 " + _tag + "</extra>"),
+                            row=1, col=1)
+                if _has_sd:
                     fig.add_trace(go.Scatter(
                         x=-_wb["sd"], y=_wb["pres"], mode="lines",
-                        line=dict(width=1, color="rgba(128,138,149,0.55)"), hoverinfo="skip", showlegend=False),
+                        line=dict(width=0), hoverinfo="skip", showlegend=False),
                         row=1, col=2)
                     fig.add_trace(go.Scatter(
                         x=_wb["sd"], y=_wb["pres"], mode="lines",
-                        line=dict(width=1, color="rgba(128,138,149,0.55)"), fill="tonextx",
+                        line=dict(width=0), fill="tonextx",
                         fillcolor="rgba(128,138,149,0.25)",
                         hoverinfo="skip", showlegend=False), row=1, col=2)
                 _pn = df["pres"].to_numpy("float64")
@@ -3082,9 +3099,18 @@ if _ftab == "Profile & Trend":
                     fig.add_trace(go.Scatter(
                         x=_rb.values, y=_rb.index, mode="lines",
                         showlegend=False,
-                        line=dict(color="#808A95", width=2),
+                        line=dict(color=_ref, width=3),
                         hovertemplate="median Δ %{x:.4g} at %{y:.0f} dbar"
                                       "<extra></extra>"), row=1, col=2)
+                    if _has_sd:
+                        for _sgn, _tag in ((-1, "-1 sd"), (1, "+1 sd")):
+                            fig.add_trace(go.Scatter(
+                                x=_sgn * _wb["sd"], y=_wb["pres"], mode="lines",
+                                showlegend=False,
+                                line=dict(color=_ref, width=2.4, dash="dot"),
+                                hovertemplate="%{x:.4g} at %{y:.0f} dbar<extra>"
+                                              "WOA23 " + _tag + "</extra>"),
+                                row=1, col=2)
                     _med = float(np.nanmedian(_res[_okr]))
                     _q1, _q3 = np.nanpercentile(_res[_okr], [25, 75])
                     _woa_note += (f" Residuals (right panel, float minus WOA23): "
