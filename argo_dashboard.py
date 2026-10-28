@@ -2721,6 +2721,12 @@ def raw_cycle_frame(path, cycle, core_path=None):
 
 
 # ---- per-float views as tabs (sidebar search + results table stay global) ----
+plottable = [p for p in measurands if p in ds or f"{p}_ADJUSTED" in ds]
+derived_here = [d for d in DERIVED_2D if d in ds and d not in plottable]
+if derived_here:
+    plottable = plottable + derived_here     # TEOS-10 fields at the end
+param_opts = plottable or measurands
+
 # st.tabs forgets which tab is open whenever a rerun changes anything inside a
 # tab (streamlit#6257), which made toggles inside tabs bounce users back to
 # Overview. A keyed segmented control holds its selection in session state, so
@@ -2733,7 +2739,8 @@ _ftab = st.segmented_control("View", _FTABS, key="float_tab",
                              label_visibility="collapsed") or _FTABS[0]
 # keyed widgets inside a section lose their state while the section is not
 # rendered; touching the keys each run keeps the choices alive across switches
-for _keep in ("param_pick", "woa_overlay", "tech_param", "raw_mode", "deseason"):
+for _keep in ("param_pick", "woa_overlay", "tech_param", "raw_mode",
+              "deseason", "data_view"):
     if _keep in st.session_state:
         st.session_state[_keep] = st.session_state[_keep]
 
@@ -2907,11 +2914,6 @@ if _ftab == "Trajectory":
 
 # ===================== Profile: parameter + data-view controls live here =====================
 if _ftab == "Profile & Trend":
-    plottable = [p for p in measurands if p in ds or f"{p}_ADJUSTED" in ds]
-    derived_here = [d for d in DERIVED_2D if d in ds and d not in plottable]
-    if derived_here:
-        plottable = plottable + derived_here     # TEOS-10 fields at the end
-    param_opts = plottable or measurands
 
     def _default_param_index(opts):
         for pref in ("TEMP", "PSAL", "CT", "PT", "DOXY"):
@@ -2937,9 +2939,11 @@ if _ftab == "Profile & Trend":
                                "(SIGMA0, CT, PT, SA, AOU) when computable.")
     if param and st.query_params.get("var") != str(param):
         st.query_params["var"] = str(param)
+    if "data_view" not in st.session_state:
+        st.session_state["data_view"] = "Adjusted (A/D)"
     view = pc2.radio(
         "Data view", ["Real-time (R)", "QC-filtered", "Adjusted (A/D)"],
-        index=2, horizontal=True,
+        horizontal=True, key="data_view",
         help="**Real-time (R)**: the reported value, no adjustment (shown whatever the "
              "parameter's data mode). "
              "**QC-filtered**: the reported value, keeping only good QC flags {1,2,5,8}. "
@@ -3032,12 +3036,12 @@ if _ftab == "Profile & Trend":
                 if _has_sd:
                     fig.add_trace(go.Scatter(
                         x=_wb["val"] - _wb["sd"], y=_wb["pres"], mode="lines",
-                        line=dict(width=0), hoverinfo="skip", showlegend=False),
+                        line=dict(width=1, color="rgba(128,138,149,0.55)"), hoverinfo="skip", showlegend=False),
                         row=1, col=1)
                     fig.add_trace(go.Scatter(
                         x=_wb["val"] + _wb["sd"], y=_wb["pres"], mode="lines",
-                        line=dict(width=0), fill="tonextx",
-                        fillcolor="rgba(128,138,149,0.18)",
+                        line=dict(width=1, color="rgba(128,138,149,0.55)"), fill="tonextx",
+                        fillcolor="rgba(128,138,149,0.25)",
                         hoverinfo="skip", showlegend=False), row=1, col=1)
                 fig.add_trace(_main, row=1, col=1)
                 fig.add_trace(go.Scatter(
@@ -3050,12 +3054,12 @@ if _ftab == "Profile & Trend":
                 if _has_sd:
                     fig.add_trace(go.Scatter(
                         x=-_wb["sd"], y=_wb["pres"], mode="lines",
-                        line=dict(width=0), hoverinfo="skip", showlegend=False),
+                        line=dict(width=1, color="rgba(128,138,149,0.55)"), hoverinfo="skip", showlegend=False),
                         row=1, col=2)
                     fig.add_trace(go.Scatter(
                         x=_wb["sd"], y=_wb["pres"], mode="lines",
-                        line=dict(width=0), fill="tonextx",
-                        fillcolor="rgba(128,138,149,0.18)",
+                        line=dict(width=1, color="rgba(128,138,149,0.55)"), fill="tonextx",
+                        fillcolor="rgba(128,138,149,0.25)",
                         hoverinfo="skip", showlegend=False), row=1, col=2)
                 _pn = df["pres"].to_numpy("float64")
                 _wf = np.interp(_pn, _wp["pres"].to_numpy("float64"),
@@ -3240,7 +3244,7 @@ if _ftab == "Profile & Trend":          # re-enter to append the trend to the Pr
         else:
             near = near.copy()
             deseason = st.toggle(
-                "Deseasonalize (remove monthly climatology)", value=False,
+                "Deseasonalize (remove monthly climatology)",
                 key="deseason",
                 help="Subtract each calendar month's mean so a long-term "
                      "trend isn't masked by the seasonal cycle.")
@@ -3646,6 +3650,11 @@ if _ftab == "Raw":
 
 # ===================== Overlay: multi-measurand profile over a cycle range =====================
 if _ftab == "Overlay":
+    # the Data view is chosen on Profile & Trend; read it from session state so
+    # this section works even when that section has not run this session
+    view = st.session_state.get("data_view", "Adjusted (A/D)")
+    adjusted = view.startswith("Adjusted")
+    apply_qc = view.startswith(("QC", "Adjusted"))
     st.subheader("Multi-measurand overlay")
     st.caption("Overlay measurands on one pressure axis, each with its own color-matched "
                "x-axis, over a chosen range of profiles. The float drifts, so narrowing "
