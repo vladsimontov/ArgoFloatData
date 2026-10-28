@@ -3009,6 +3009,21 @@ with tab_prof:
                 fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
                                     column_widths=[0.62, 0.38],
                                     horizontal_spacing=0.05)
+                # climatological spread: +-1 sd of the observations behind the
+                # mean, shaded under everything else in both panels
+                _wb = (_wp.dropna(subset=["sd"])
+                       if "sd" in _wp.columns else _wp.iloc[0:0])
+                _has_sd = len(_wb) > 1
+                if _has_sd:
+                    fig.add_trace(go.Scatter(
+                        x=_wb["val"] - _wb["sd"], y=_wb["pres"], mode="lines",
+                        line=dict(width=0), hoverinfo="skip", showlegend=False),
+                        row=1, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=_wb["val"] + _wb["sd"], y=_wb["pres"], mode="lines",
+                        line=dict(width=0), fill="tonextx",
+                        fillcolor="rgba(128,138,149,0.18)",
+                        hoverinfo="skip", showlegend=False), row=1, col=1)
                 fig.add_trace(_main, row=1, col=1)
                 fig.add_trace(go.Scatter(
                     x=_wp["val"], y=_wp["pres"], mode="lines", name="WOA23",
@@ -3017,6 +3032,16 @@ with tab_prof:
                     hovertemplate="%{x:.4g} at %{y:.0f} dbar"
                                   "<extra>WOA23 climatology</extra>"),
                     row=1, col=1)
+                if _has_sd:
+                    fig.add_trace(go.Scatter(
+                        x=-_wb["sd"], y=_wb["pres"], mode="lines",
+                        line=dict(width=0), hoverinfo="skip", showlegend=False),
+                        row=1, col=2)
+                    fig.add_trace(go.Scatter(
+                        x=_wb["sd"], y=_wb["pres"], mode="lines",
+                        line=dict(width=0), fill="tonextx",
+                        fillcolor="rgba(128,138,149,0.18)",
+                        hoverinfo="skip", showlegend=False), row=1, col=2)
                 _pn = df["pres"].to_numpy("float64")
                 _wf = np.interp(_pn, _wp["pres"].to_numpy("float64"),
                                 _wp["val"].to_numpy("float64"),
@@ -3047,6 +3072,20 @@ with tab_prof:
                                   f"median {_med:+.3g}, middle half {_q1:+.3g} "
                                   f"to {_q3:+.3g}, {int(_okr.sum()):,} samples "
                                   "within the WOA depth range.")
+                    if _has_sd:
+                        _sdf = np.interp(_pn,
+                                         _wb["pres"].to_numpy("float64"),
+                                         _wb["sd"].to_numpy("float64"),
+                                         left=np.nan, right=np.nan)
+                        _inb = _okr & np.isfinite(_sdf)
+                        if _inb.any():
+                            _frac = float(
+                                (np.abs(_res[_inb]) <= _sdf[_inb]).mean())
+                            _woa_note += (
+                                f" {_frac:.0%} of samples sit inside the shaded "
+                                "band: ±1 standard deviation of the observations "
+                                "behind the climatology, i.e. the cell's natural "
+                                "spread, not an instrument error bar.")
                 fig.add_vline(x=0, row=1, col=2, line_color="#808A95",
                               line_dash="dot", line_width=1)
                 fig.update_xaxes(title_text=vlabel, row=1, col=1)

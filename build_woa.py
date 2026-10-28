@@ -74,9 +74,19 @@ def main():
         # WOA climatological time axes are not CF-decodable; we drop time anyway
         ds = xr.open_dataset(src, decode_times=False)
         da = ds[f"{code}_an"].squeeze(drop=True)   # (depth, lat, lon)
-        df = da.to_dataframe(name="val").reset_index().dropna(subset=["val"])
-        df = df[["lat", "lon", "depth", "val"]].astype("float32")
+        df = da.to_dataframe(name="val").reset_index()
+        # the per-cell standard deviation of observations: the climatological
+        # spread, which the dashboard shades as a +-1 sd envelope
+        if f"{code}_sd" in ds:
+            sd = (ds[f"{code}_sd"].squeeze(drop=True)
+                  .to_dataframe(name="sd").reset_index())
+            df = df.merge(sd, on=["depth", "lat", "lon"], how="left")
+        else:
+            df["sd"] = np.nan
+        df = df.dropna(subset=["val"])
+        df = df[["lat", "lon", "depth", "val", "sd"]].astype("float32")
         df["val"] = df["val"].round(dec)
+        df["sd"] = df["sd"].round(dec)
         df = df.sort_values(["lat", "lon", "depth"]).reset_index(drop=True)
         out = os.path.join(args.out, f"woa23_{name}.parquet")
         df.to_parquet(out, index=False, compression="zstd",
