@@ -31,6 +31,8 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
+import canyonb
+
 # Larger default chart fonts so axis titles, ticks, and legends stay readable.
 # Individual figures inherit this base unless they set their own size.
 _argo_tpl = pio.templates[pio.templates.default]
@@ -1439,7 +1441,11 @@ def page_about():
         "Bottle-sample overlays use **GLODAPv2.2023** (Lauvset et al. 2024, "
         "[ESSD 16, 2047-2072](https://doi.org/10.5194/essd-16-2047-2024)), "
         "courtesy of the GLODAP group and NOAA NCEI; the slimmed bottle table "
-        "is likewise served under this project's data API.")
+        "is likewise served under this project's data API. Nitrate "
+        "self-consistency checks use **CANYON-B** (Bittig et al. 2018, "
+        "[Front. Mar. Sci. 5:328](https://doi.org/10.3389/fmars.2018.00328)); "
+        "predictions are computed in-app from the authors' published network "
+        "weights and are estimates, not measurements.")
     st.stop()
 
 
@@ -2785,8 +2791,9 @@ _ftab = st.segmented_control("View", _FTABS, key="float_tab",
                              label_visibility="collapsed") or _FTABS[0]
 # keyed widgets inside a section lose their state while the section is not
 # rendered; touching the keys each run keeps the choices alive across switches
-for _keep in ("param_pick", "woa_overlay", "glodap_overlay", "tech_param",
-              "raw_mode", "deseason", "data_view"):
+for _keep in ("param_pick", "woa_overlay", "glodap_overlay",
+              "canyonb_overlay", "tech_param", "raw_mode", "deseason",
+              "data_view"):
     if _keep in st.session_state:
         st.session_state[_keep] = st.session_state[_keep]
 
@@ -3017,6 +3024,21 @@ if _ftab == "Profile & Trend":
              "reasons (seasons, eddies, trends), not only sensor error."
              + ("" if _glo_ok else " Available for TEMP, PSAL, DOXY, AOU and "
                                    "NITRATE.")) and _glo_ok
+    _cb_ok = (param == "NITRATE" and "JULD" in ds
+              and all(_pick(ds, _v, adjusted) is not None
+                      for _v in ("TEMP", "PSAL", "DOXY")))
+    canyonb_on = st.toggle(
+        "Overlay CANYON-B prediction (nitrate implied by this float's T, S, O2)",
+        key="canyonb_overlay", disabled=not _cb_ok,
+        help="A Bayesian neural network (Bittig et al. 2018) trained on GLODAP "
+             "bottle data predicts what the nitrate sensor should read given "
+             "the float's own temperature, salinity, oxygen, position and "
+             "date. A self-consistency check of the BGC sensor against the "
+             "physical sensors, NOT an independent measurement. Weights are "
+             "fetched once from the authors' repository and cached."
+             + ("" if _cb_ok else " Available when NITRATE is plotted and the "
+                                  "float carries TEMP, PSAL and DOXY.")
+        ) and _cb_ok
 
     if param:
         df, pcol, vcol = param_long_frame(ds, param, adjusted, apply_qc)
@@ -3277,15 +3299,87 @@ if _ftab == "Profile & Trend":
                             " Bottles from other years differ for real reasons "
                             "(seasons, eddies, trends), not only sensor error. "
                             "Cite GLODAPv2.2023 (Lauvset et al. 2024).")
+            _cb_note, _cb = None, None
+            if canyonb_on:
+                try:
+                    _cbp = canyonb.fetch_weights(
+                        "NO3", os.path.join(ROOT, "canyonb"))
+                    if _cbp is None:
+                        _cb_note = ("Could not fetch the CANYON-B weight file; "
+                                    "try again later.")
+                    else:
+                        _T = ds[_pick(ds, "TEMP", adjusted)].values
+                        _S = ds[_pick(ds, "PSAL", adjusted)].values
+                        _O = ds[_pick(ds, "DOXY", adjusted)].values
+                        _P = ds[_pick(ds, "PRES", adjusted)].values
+                        _nlv = _P.shape[1]
+                        _ju = pd.to_datetime(pd.Series(
+                            np.asarray(ds["JULD"].values).ravel()))
+                        _yr = (_ju.dt.year + (
+                            _ju - pd.to_datetime(
+                                _ju.dt.year.astype("Int64").astype(str)
+                                + "-01-01", errors="coerce"))
+                            .dt.total_seconds() / 86400.0 / 365.0
+                        ).to_numpy("float64")
+                        _pred = canyonb.predict(
+                            "NO3", np.repeat(_yr, _nlv),
+                            np.repeat(np.asarray(
+                                ds["LATITUDE"].values).ravel(), _nlv),
+                            np.repeat(np.asarray(
+                                ds["LONGITUDE"].values).ravel(), _nlv),
+                            _P.ravel(), _T.ravel(), _S.ravel(), _O.ravel(),
+                            _cbp)
+                        _ok3 = np.isfinite(_pred) & np.isfinite(_P.ravel())
+                        if _ok3.any():
+                            _cb = (pd.DataFrame(
+                                {"p": (_P.ravel()[_ok3] // 20) * 20 + 10,
+                                 "v": _pred[_ok3]})
+                                .groupby("p")["v"].median())
+                        else:
+                            _cb_note = ("CANYON-B found no samples with "
+                                        "finite T, S, O2 inputs.")
+                except Exception:
+                    _cb_note = "CANYON-B prediction failed for this float."
+                if (_cb is None or len(_cb) <= 1) and _cb_note is None:
+                    _cb_note = ("CANYON-B could not produce a profile here: "
+                                "not enough co-located finite T, S and O2 "
+                                "samples under the current data view.")
+            if _cb is not None and len(_cb) > 1:
+                _cbt = go.Scatter(
+                    x=_cb.values, y=_cb.index.to_numpy("float64"),
+                    mode="lines",
+                    name="CANYON-B prediction", legendgroup="canyonb",
+                    line=dict(color=_ref, width=2.5, dash="dashdot"),
+                    hovertemplate="%{x:.4g} at %{y:.0f} dbar"
+                                  "<extra>CANYON-B prediction</extra>")
+                if _wp is not None:
+                    fig.add_trace(_cbt, row=1, col=1)
+                else:
+                    fig.add_trace(_cbt)
+                _ci2 = np.interp(df["pres"].to_numpy("float64"),
+                                 _cb.index.to_numpy("float64"),
+                                 _cb.to_numpy("float64"),
+                                 left=np.nan, right=np.nan)
+                _cr = df["value"].to_numpy("float64") - _ci2
+                _cok = np.isfinite(_cr)
+                if _cok.any():
+                    _cb_note = (
+                        "Dash-dot line: CANYON-B PREDICTION (Bittig et al. "
+                        "2018), nitrate inferred from this float's own "
+                        "temperature, salinity and oxygen: a self-consistency "
+                        "check of the nitrate sensor, not an independent "
+                        "measurement. Float minus prediction: median "
+                        f"{float(np.nanmedian(_cr[_cok])):+.3g} umol/kg.")
             if _wp is not None:
                 fig.update_layout(
                     height=600, showlegend=True,
                     margin=dict(b=80),
                     legend=dict(orientation="h", y=-0.12, yanchor="top"))
             else:
+                _any_ref = _gl is not None or _cb is not None
                 fig.update_layout(
-                    height=600 if _gl is not None else 560,
-                    showlegend=_gl is not None, margin=dict(b=80),
+                    height=600 if _any_ref else 560,
+                    showlegend=_any_ref, margin=dict(b=80),
                     legend=dict(orientation="h", y=-0.12, yanchor="top"))
             _titled(fig, f"{float_tag} · {param} profile")
             st.plotly_chart(fig, width="stretch")
@@ -3297,6 +3391,8 @@ if _ftab == "Profile & Trend":
                 _woa_slot.caption(_woa_note)
             if _glo_note:
                 st.caption(_glo_note)
+            if _cb_note:
+                st.caption(_cb_note)
 
             d1, d2 = st.columns(2)
             d1.download_button("Download this parameter (CSV)",
@@ -3308,7 +3404,7 @@ if _ftab == "Profile & Trend":
             d2.download_button("Download full float (NetCDF)", _orig_bytes,
                                file_name=os.path.basename(_orig_path),
                                mime="application/x-netcdf")
-            if _wp is not None or _gl is not None:
+            if _wp is not None or _gl is not None or _cb is not None:
                 _fd = df.copy()
                 _fd["source"] = "float"
                 if _wp is not None:
@@ -3333,6 +3429,12 @@ if _ftab == "Profile & Trend":
                         _gd["float_minus_bottle"] = (
                             _gd["float_median_at_pres"] - _gd["value"])
                     _parts.append(_gd)
+                if _cb is not None:
+                    _cbd = pd.DataFrame({
+                        "pres": _cb.index.to_numpy("float64"),
+                        "value": _cb.to_numpy("float64")})
+                    _cbd["source"] = "canyon_b"
+                    _parts.append(_cbd)
                 _cmp = pd.concat(_parts, ignore_index=True)
                 _hdr = (
                     "# argofloat.streamlit.app comparison export\n"
@@ -3344,6 +3446,10 @@ if _ftab == "Profile & Trend":
                     + ("# WOA23: NOAA NCEI World Ocean Atlas 2023, 1-degree "
                        "annual analyzed mean at the float's cell\n"
                        if _wp is not None else "")
+                    + ("# CANYON-B: predicted nitrate from the float's own "
+                       "T, S, O2 (Bittig et al. 2018, "
+                       "doi:10.3389/fmars.2018.00328); a prediction, not a "
+                       "measurement\n" if _cb is not None else "")
                     + ("# GLODAP: GLODAPv2.2023 (doi:10.5194/essd-16-2047-2024)"
                        ", flag-2 bottles within 100 km of the float's median "
                        "position; float_minus_bottle uses the float's 20 dbar "
@@ -3376,6 +3482,14 @@ if _ftab == "Profile & Trend":
                             "biogeochemical data product. Earth Syst. Sci. Data "
                             "16, 2047-2072. "
                             "https://doi.org/10.5194/essd-16-2047-2024")
+                    if _cb is not None:
+                        _cites.append(
+                            "Bittig, H. C., et al. (2018). An alternative to "
+                            "static climatologies: robust estimation of open "
+                            "ocean CO2 variables and nutrient concentrations "
+                            "from T, S, and O2 data using Bayesian neural "
+                            "networks. Front. Mar. Sci. 5:328. "
+                            "https://doi.org/10.3389/fmars.2018.00328")
                     _cites.append("View: https://argofloat.streamlit.app/"
                                   f"?wmo={sel_wmo}&var={param}")
                     st.code("\n\n".join(_cites), language=None)
