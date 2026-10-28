@@ -31,6 +31,13 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
+# the app's own modules live beside this file; guarantee they are importable
+# regardless of how the script is launched (streamlit run, AppTest under
+# `python -m pytest`, or AppTest under the bare `pytest` console script,
+# which does NOT put the working directory on sys.path)
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
 import canyonb
 
 # Larger default chart fonts so axis titles, ticks, and legends stay readable.
