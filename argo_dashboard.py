@@ -3105,6 +3105,9 @@ if _ftab == "Profile & Trend":
                                 "band: ±1 standard deviation of the observations "
                                 "behind the climatology, i.e. the cell's natural "
                                 "spread, not an instrument error bar.")
+                if not _has_sd:
+                    _woa_note += (" WOA23 reports no spread estimate at this "
+                                  "grid cell, so no uncertainty band is shown.")
                 fig.add_vline(x=0, row=1, col=2, line_color="#808A95",
                               line_dash="dot", line_width=1)
                 fig.update_xaxes(title_text=vlabel, row=1, col=1)
