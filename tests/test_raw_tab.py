@@ -8,8 +8,8 @@ a live crash, not a corner case. The fix clamps: value=min(10, _nth_max).
 
 This drives the real app through AppTest: type a WMO in the sidebar search
 (a typed WMO bypasses every filter), pick the float, and let the script run.
-Streamlit executes every `with tab_*:` body on each run regardless of which
-tab is focused, so the Raw tab really does render here.
+The per-float view is a keyed segmented control (only the selected section
+renders), so the test selects the Raw section via session state first.
 
 Fixture float 4903932 (BGC, coriolis, 3 cycles) has the same shape as the
 reported 4904029. Its Sprof.nc is not committed (argo_local/dac/** is
@@ -36,6 +36,7 @@ def _load_raw_tab():
     """Boot the app, search for the fixture WMO, select it, return the AppTest."""
     os.environ["ARGO_ROOT"] = str(ARGO_ROOT)
     at = AppTest.from_file(str(APP), default_timeout=300)
+    at.session_state["float_tab"] = "Raw"   # render the Raw section
     at.run()
     assert not at.exception, f"App raised on boot: {[e.value for e in at.exception]}"
 

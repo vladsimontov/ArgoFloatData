@@ -1041,6 +1041,7 @@ if "_dl_seen" not in st.session_state:
     _dl_v = str(st.query_params.get("var") or "").strip().upper()
     if _dl_v:
         st.session_state["_dl_var"] = _dl_v
+        st.session_state["float_tab"] = "Profile & Trend"
     if _dl_w and (floats["wmo"].astype(str) == _dl_w).any():
         st.session_state["q_box"] = _dl_w
         st.session_state["wmo_pick"] = _dl_w
@@ -2331,7 +2332,9 @@ if st.session_state.get("_focus_wmo") != str(sel_wmo):
     const _w = "{sel_wmo}";   // embedded so this re-executes per opened float
     const d = window.parent.document;
     function go(n) {{
-      const el = d.querySelector("[data-testid='stTabs']");
+      const el = d.querySelector("[data-testid='stButtonGroup'], "
+                               + "[data-testid='stSegmentedControl'], "
+                               + "[data-testid='stTabs']");
       if (el) el.scrollIntoView({{behavior: 'smooth', block: 'start'}});
       else if (n > 0) setTimeout(function() {{ go(n - 1); }}, 200);
     }}
@@ -2718,12 +2721,24 @@ def raw_cycle_frame(path, cycle, core_path=None):
 
 
 # ---- per-float views as tabs (sidebar search + results table stay global) ----
-tab_over, tab_traj, tab_prof, tab_overlay, tab_ts, tab_tech, tab_raw = \
-    st.tabs(["Overview", "Trajectory", "Profile & Trend", "Overlay", "T-S",
-             "Tech", "Raw"])
+# st.tabs forgets which tab is open whenever a rerun changes anything inside a
+# tab (streamlit#6257), which made toggles inside tabs bounce users back to
+# Overview. A keyed segmented control holds its selection in session state, so
+# it can never jump, deep links can restore it, and only the open section runs.
+_FTABS = ["Overview", "Trajectory", "Profile & Trend", "Overlay", "T-S",
+          "Tech", "Raw"]
+if st.session_state.get("float_tab") not in _FTABS:
+    st.session_state["float_tab"] = _FTABS[0]
+_ftab = st.segmented_control("View", _FTABS, key="float_tab",
+                             label_visibility="collapsed") or _FTABS[0]
+# keyed widgets inside a section lose their state while the section is not
+# rendered; touching the keys each run keeps the choices alive across switches
+for _keep in ("param_pick", "woa_overlay", "tech_param", "raw_mode", "deseason"):
+    if _keep in st.session_state:
+        st.session_state[_keep] = st.session_state[_keep]
 
 # ===================== Overview: metadata + sensors + calibration =====================
-with tab_over:
+if _ftab == "Overview":
     st.subheader(f"Float {sel_wmo}")
     if frow is not None:
         launch = parse_argo_date(frow.get("launch_date"))
@@ -2847,7 +2862,7 @@ with tab_over:
             st.info("No calibration coefficients are reported in this float's files.")
 
 # ===================== Trajectory: real basemap (pydeck) =====================
-with tab_traj:
+if _ftab == "Trajectory":
     lat = ds["LATITUDE"].values if "LATITUDE" in ds else None
     lon = ds["LONGITUDE"].values if "LONGITUDE" in ds else None
     if lat is None or lon is None or not np.isfinite(lat).any():
@@ -2891,7 +2906,7 @@ with tab_traj:
                    "Basemap © CARTO / OpenStreetMap.")
 
 # ===================== Profile: parameter + data-view controls live here =====================
-with tab_prof:
+if _ftab == "Profile & Trend":
     plottable = [p for p in measurands if p in ds or f"{p}_ADJUSTED" in ds]
     derived_here = [d for d in DERIVED_2D if d in ds and d not in plottable]
     if derived_here:
@@ -3096,7 +3111,7 @@ with tab_prof:
                 fig = go.Figure(_main)
                 fig.update_xaxes(title=vlabel)
                 fig.update_yaxes(autorange="reversed", title=plabel)
-            fig.update_layout(height=560)
+            fig.update_layout(height=560, showlegend=False)
             _titled(fig, f"{float_tag} · {param} profile")
             st.plotly_chart(fig, width="stretch")
             # a permanent slot, filled or left blank: st.tabs resets to the first
@@ -3118,7 +3133,7 @@ with tab_prof:
                                mime="application/x-netcdf")
 
 # ======== Profile & Trend (cont.): depth-time section (measurand-driven) ========
-with tab_prof:          # re-enter to append the section, after the profile, before the trend
+if _ftab == "Profile & Trend":          # re-enter to append the section, after the profile, before the trend
     if param and not df.empty:
         st.markdown("---")
         st.subheader(f"{param} depth-time section")
@@ -3151,7 +3166,7 @@ with tab_prof:          # re-enter to append the section, after the profile, bef
                        "grid. White dotted line = mixed-layer depth (where computed).")
 
 # ===================== T-S diagram (parameter-independent) =====================
-with tab_ts:
+if _ftab == "T-S":
     st.subheader("Temperature-Salinity diagram")
     tsf = ts_diagram_frame(ds)
     if tsf is None or tsf[0].empty:
@@ -3194,7 +3209,7 @@ with tab_ts:
                    "σ₀ contours & absolute salinity).")
 
 # ============ Profile & Trend (cont.): per-pressure time series + Sen/Mann-Kendall ============
-with tab_prof:          # re-enter to append the trend to the Profile & Trend tab
+if _ftab == "Profile & Trend":          # re-enter to append the trend to the Profile & Trend tab
     if param and not df.empty and "time" not in df.columns:
         st.markdown("---")
         st.subheader(f"{param} time series at a pressure level")
@@ -3335,7 +3350,7 @@ with tab_prof:          # re-enter to append the trend to the Profile & Trend ta
                 mime="text/csv", key="ts_download")
 
 # ===================== Raw: per-cycle diagnostic profile =====================
-with tab_raw:
+if _ftab == "Raw":
     st.subheader("Raw profiles (per-cycle diagnostics)")
     st.caption("Pulls per-cycle raw NetCDFs straight from the GDAC, with every parameter "
                "they report, including intermediate sensor signals (raw fluorescence, "
@@ -3630,7 +3645,7 @@ with tab_raw:
                         "report, plus their QC flags, not only the ones plotted above.")
 
 # ===================== Overlay: multi-measurand profile over a cycle range =====================
-with tab_overlay:
+if _ftab == "Overlay":
     st.subheader("Multi-measurand overlay")
     st.caption("Overlay measurands on one pressure axis, each with its own color-matched "
                "x-axis, over a chosen range of profiles. The float drifts, so narrowing "
@@ -3709,7 +3724,7 @@ with tab_overlay:
 
 
 # ===================== Tech: engineering telemetry from <wmo>_tech.nc =====================
-with tab_tech:
+if _ftab == "Tech":
     st.caption("Engineering telemetry from the float's tech file: battery voltages, "
                "pump activity and cycle timings, straight from the GDAC. Parameter "
                "names vary by float model and DAC, so the list below is whatever "
