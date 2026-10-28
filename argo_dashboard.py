@@ -2739,7 +2739,7 @@ _ftab = st.segmented_control("View", _FTABS, key="float_tab",
                              label_visibility="collapsed") or _FTABS[0]
 # keyed widgets inside a section lose their state while the section is not
 # rendered; touching the keys each run keeps the choices alive across switches
-for _keep in ("param_pick", "woa_overlay", "woa_only", "tech_param",
+for _keep in ("param_pick", "woa_overlay", "tech_param",
               "raw_mode", "deseason", "data_view"):
     if _keep in st.session_state:
         st.session_state[_keep] = st.session_state[_keep]
@@ -2961,14 +2961,6 @@ if _ftab == "Profile & Trend":
              "an offset is not by itself a sensor problem."
              + ("" if _woa_ok else " Available for TEMP, PSAL, DOXY, AOU and "
                                    "NITRATE.")) and _woa_ok
-    _woa_only = False
-    if woa_on:
-        _woa_only = st.toggle(
-            "Hide float data (show only the climatology envelope)",
-            key="woa_only",
-            help="Blanks the float's points so the WOA23 mean and its ±1 sd "
-                 "envelope are easy to see on their own. The median residual "
-                 "curve stays, as the float's one-line summary.")
 
     if param:
         df, pcol, vcol = param_long_frame(ds, param, adjusted, apply_qc)
@@ -3026,6 +3018,7 @@ if _ftab == "Profile & Trend":
                                      "cell.")
             _main = go.Scattergl(
                 x=df["value"], y=df["pres"], mode="markers",
+                name="Float data", legendgroup="float",
                 marker=dict(size=4, color=cvals, colorscale="Viridis",
                             colorbar=cbar),
                 customdata=cdata, hovertemplate=hover)
@@ -3050,18 +3043,19 @@ if _ftab == "Profile & Trend":
                 if _has_sd:
                     fig.add_trace(go.Scatter(
                         x=_wb["val"] - _wb["sd"], y=_wb["pres"], mode="lines",
+                        legendgroup="woa",
                         line=dict(width=0), hoverinfo="skip", showlegend=False),
                         row=1, col=1)
                     fig.add_trace(go.Scatter(
                         x=_wb["val"] + _wb["sd"], y=_wb["pres"], mode="lines",
+                        legendgroup="woa",
                         line=dict(width=0), fill="tonextx",
                         fillcolor="rgba(128,138,149,0.25)",
                         hoverinfo="skip", showlegend=False), row=1, col=1)
-                if not _woa_only:
-                    fig.add_trace(_main, row=1, col=1)
+                fig.add_trace(_main, row=1, col=1)
                 fig.add_trace(go.Scatter(
-                    x=_wp["val"], y=_wp["pres"], mode="lines", name="WOA23",
-                    showlegend=False,
+                    x=_wp["val"], y=_wp["pres"], mode="lines",
+                    name="WOA23 mean ± 1 sd", legendgroup="woa",
                     line=dict(color=_ref, width=3, dash="dash"),
                     hovertemplate="%{x:.4g} at %{y:.0f} dbar"
                                   "<extra>WOA23 climatology</extra>"),
@@ -3073,6 +3067,7 @@ if _ftab == "Profile & Trend":
                         fig.add_trace(go.Scatter(
                             x=_wb["val"] + _sgn * _wb["sd"],
                             y=_wb["pres"], mode="lines", showlegend=False,
+                            legendgroup="woa",
                             line=dict(color=_ref, width=2.4, dash="dot"),
                             hovertemplate="%{x:.4g} at %{y:.0f} dbar<extra>"
                                           "WOA23 " + _tag + "</extra>"),
@@ -3080,10 +3075,12 @@ if _ftab == "Profile & Trend":
                 if _has_sd:
                     fig.add_trace(go.Scatter(
                         x=-_wb["sd"], y=_wb["pres"], mode="lines",
+                        legendgroup="woa",
                         line=dict(width=0), hoverinfo="skip", showlegend=False),
                         row=1, col=2)
                     fig.add_trace(go.Scatter(
                         x=_wb["sd"], y=_wb["pres"], mode="lines",
+                        legendgroup="woa",
                         line=dict(width=0), fill="tonextx",
                         fillcolor="rgba(128,138,149,0.25)",
                         hoverinfo="skip", showlegend=False), row=1, col=2)
@@ -3093,23 +3090,22 @@ if _ftab == "Profile & Trend":
                                 left=np.nan, right=np.nan)
                 _res = df["value"].to_numpy("float64") - _wf
                 _okr = np.isfinite(_res)
-                if not _woa_only:
-                    fig.add_trace(go.Scattergl(
-                        x=_res[_okr], y=_pn[_okr], mode="markers",
-                        marker=dict(size=4, color=np.asarray(cvals)[_okr],
-                                    colorscale="Viridis", showscale=False),
-                        customdata=np.asarray(cdata)[_okr],
-                        hovertemplate="Δ %{x:.4g}<br>%{y:.1f} dbar<br>"
-                                      "%{customdata}"
-                                      "<extra>float minus WOA23</extra>"),
-                        row=1, col=2)
+                fig.add_trace(go.Scattergl(
+                    x=_res[_okr], y=_pn[_okr], mode="markers",
+                    legendgroup="float", showlegend=False,
+                    marker=dict(size=4, color=np.asarray(cvals)[_okr],
+                                colorscale="Viridis", showscale=False),
+                    customdata=np.asarray(cdata)[_okr],
+                    hovertemplate="Δ %{x:.4g}<br>%{y:.1f} dbar<br>%{customdata}"
+                                  "<extra>float minus WOA23</extra>"),
+                    row=1, col=2)
                 if _okr.any():
                     _rb = (pd.DataFrame({"p": (_pn[_okr] // 50) * 50 + 25,
                                          "r": _res[_okr]})
                            .groupby("p")["r"].median())
                     fig.add_trace(go.Scatter(
                         x=_rb.values, y=_rb.index, mode="lines",
-                        showlegend=False,
+                        name="Median residual", legendgroup="med",
                         line=dict(color=_ref, width=3),
                         hovertemplate="median Δ %{x:.4g} at %{y:.0f} dbar"
                                       "<extra></extra>"), row=1, col=2)
@@ -3117,7 +3113,7 @@ if _ftab == "Profile & Trend":
                         for _sgn, _tag in ((-1, "-1 sd"), (1, "+1 sd")):
                             fig.add_trace(go.Scatter(
                                 x=_sgn * _wb["sd"], y=_wb["pres"], mode="lines",
-                                showlegend=False,
+                                showlegend=False, legendgroup="woa",
                                 line=dict(color=_ref, width=2.4, dash="dot"),
                                 hovertemplate="%{x:.4g} at %{y:.0f} dbar<extra>"
                                               "WOA23 " + _tag + "</extra>"),
@@ -3155,7 +3151,13 @@ if _ftab == "Profile & Trend":
                 fig = go.Figure(_main)
                 fig.update_xaxes(title=vlabel)
                 fig.update_yaxes(autorange="reversed", title=plabel)
-            fig.update_layout(height=560, showlegend=False)
+            if _wp is not None:
+                fig.update_layout(
+                    height=600, showlegend=True,
+                    margin=dict(b=80),
+                    legend=dict(orientation="h", y=-0.12, yanchor="top"))
+            else:
+                fig.update_layout(height=560, showlegend=False)
             _titled(fig, f"{float_tag} · {param} profile")
             st.plotly_chart(fig, width="stretch")
             # a permanent slot, filled or left blank: st.tabs resets to the first
