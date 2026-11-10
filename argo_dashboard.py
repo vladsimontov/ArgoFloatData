@@ -1392,7 +1392,8 @@ def page_fleet():
                 t2.dataframe(_active_tbl.iloc[::-1], width="stretch", height=240)
 
             st.subheader("Who runs the fleet")
-            _scope = st.segmented_control(
+            _sc1, _sc2 = st.columns([1, 2])
+            _scope = _sc1.segmented_control(
                 "Scope", ["Active now", "All time"], key="fleet_who_scope",
                 label_visibility="collapsed") or "Active now"
             _all_time = _scope == "All time"
@@ -1400,13 +1401,30 @@ def page_fleet():
                 ROOT, None if _all_time else ACTIVE_DAYS,
                 pd.Timestamp.now().normalize().isoformat())
             _word = "ever" if _all_time else "active"
+            _types_here = [t for t in TYPE_COLORS
+                           if (_by_pi is not None and t in _by_pi.columns)
+                           or (_by_proj is not None and t in _by_proj.columns)]
+            _tpick = _sc2.segmented_control(
+                "Float type", ["All types"] + _types_here,
+                key="fleet_who_type", label_visibility="collapsed",
+                help="Pick one float type to re-rank the charts by that type "
+                     "alone; a Deep specialist can top the Deep list without "
+                     "cracking the overall top 10.") or "All types"
+            if _tpick not in ["All types"] + _types_here:
+                _tpick = "All types"
 
             def _top_bar(bt, col, title, n=10):
                 if bt is None or not len(bt):
                     col.info("No attribution data in the index.")
                     return
-                bt = (bt.assign(_tot=bt.sum(axis=1)).sort_values("_tot")
-                      .drop(columns="_tot").tail(n))
+                if _tpick != "All types":
+                    if _tpick not in bt.columns:
+                        col.info(f"No {_tpick} floats in this view.")
+                        return
+                    bt = bt[bt[_tpick] > 0].sort_values(_tpick)[[_tpick]].tail(n)
+                else:
+                    bt = (bt.assign(_tot=bt.sum(axis=1)).sort_values("_tot")
+                          .drop(columns="_tot").tail(n))
                 _figp = go.Figure()
                 for _t in [c for c in TYPE_COLORS if c in bt.columns]:
                     _figp.add_trace(go.Bar(
@@ -1416,24 +1434,27 @@ def page_fleet():
                                       + _t + "</extra>"))
                 _figp.update_layout(
                     barmode="stack", height=440,
-                    margin=dict(l=10, r=10, t=60, b=10),
+                    margin=dict(l=10, r=10, t=40, b=10),
                     xaxis_title=f"{_word} floats",
-                    legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+                    showlegend=_tpick == "All types",
+                    legend=dict(orientation="h", y=-0.18, yanchor="top"))
                 col.markdown(f"**{title}**")
                 col.plotly_chart(_figp, width="stretch")
 
             p1, p2 = st.columns(2)
+            _tt = "" if _tpick == "All types" else f" ({_tpick})"
             if _all_time:
-                _top_bar(_by_pi, p1, "Largest float deployers of all time")
-                _top_bar(_by_proj, p2, "Largest programs of all time")
+                _top_bar(_by_pi, p1, f"Largest float deployers of all time{_tt}")
+                _top_bar(_by_proj, p2, f"Largest programs of all time{_tt}")
                 st.caption("Every float ever indexed at the GDAC since 1997, "
                            "active or not, split by float type. A float run "
                            "by a team credits every named PI, so PI counts "
                            "can overlap; spelling variants are grouped into "
                            "people the same way as the search filter.")
             else:
-                _top_bar(_by_pi, p1, "Most active principal investigators")
-                _top_bar(_by_proj, p2, "Biggest programs right now")
+                _top_bar(_by_pi, p1,
+                         f"Most active principal investigators{_tt}")
+                _top_bar(_by_proj, p2, f"Biggest programs right now{_tt}")
                 st.caption(f"Floats reporting within {ACTIVE_DAYS} days, "
                            "split by float type. A float run by a team "
                            "credits every named PI, so PI counts can overlap; "
