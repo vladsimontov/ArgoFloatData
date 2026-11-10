@@ -853,16 +853,21 @@ def pi_activity(root, days, today):
     """Active floats per person and per program, split by float type: the
     'who runs the fleet' view. People come from pi_directory, so spelling
     variants collapse; a team float credits every named PI, so per-person
-    counts overlap by design. Returns (by_person, by_program) frames indexed
-    by name with one column per float type."""
+    counts overlap by design. days=None skips the recency filter and counts
+    every float ever indexed, inactive ones included (the all-time view).
+    Returns (by_person, by_program) frames indexed by name with one column
+    per float type."""
     _s, fl = load_tables(root)
     empty = pd.DataFrame()
     if fl is None or not {"pi_name", "last_date"}.issubset(fl.columns):
         return empty, empty
-    age = (pd.Timestamp(today)
-           - pd.to_datetime(fl["last_date"].map(parse_argo_date),
-                            errors="coerce")).dt.days
-    sub = fl[age.le(days).fillna(False)].copy()
+    if days is None:
+        sub = fl.copy()
+    else:
+        age = (pd.Timestamp(today)
+               - pd.to_datetime(fl["last_date"].map(parse_argo_date),
+                                errors="coerce")).dt.days
+        sub = fl[age.le(days).fillna(False)].copy()
     if not len(sub):
         return empty, empty
     base = (sub["data_kind"].astype(str).map({"bgc": "BGC", "core": "Core"})
@@ -1387,8 +1392,14 @@ def page_fleet():
                 t2.dataframe(_active_tbl.iloc[::-1], width="stretch", height=240)
 
             st.subheader("Who runs the fleet")
+            _scope = st.segmented_control(
+                "Scope", ["Active now", "All time"], key="fleet_who_scope",
+                label_visibility="collapsed") or "Active now"
+            _all_time = _scope == "All time"
             _by_pi, _by_proj = pi_activity(
-                ROOT, ACTIVE_DAYS, pd.Timestamp.now().normalize().isoformat())
+                ROOT, None if _all_time else ACTIVE_DAYS,
+                pd.Timestamp.now().normalize().isoformat())
+            _word = "ever" if _all_time else "active"
 
             def _top_bar(bt, col, title, n=10):
                 if bt is None or not len(bt):
@@ -1401,23 +1412,33 @@ def page_fleet():
                     _figp.add_trace(go.Bar(
                         y=bt.index, x=bt[_t], name=_t, orientation="h",
                         marker_color=_th[_t],
-                        hovertemplate="%{y} · %{x:,} active<extra>" + _t
-                                      + "</extra>"))
+                        hovertemplate="%{y} · %{x:,} " + _word + "<extra>"
+                                      + _t + "</extra>"))
                 _figp.update_layout(
                     barmode="stack", height=440,
                     margin=dict(l=10, r=10, t=60, b=10),
-                    xaxis_title="active floats",
+                    xaxis_title=f"{_word} floats",
                     legend=dict(orientation="h", y=1.02, yanchor="bottom"))
                 col.markdown(f"**{title}**")
                 col.plotly_chart(_figp, width="stretch")
 
             p1, p2 = st.columns(2)
-            _top_bar(_by_pi, p1, "Most active principal investigators")
-            _top_bar(_by_proj, p2, "Biggest programs right now")
-            st.caption(f"Floats reporting within {ACTIVE_DAYS} days, split by "
-                       "float type. A float run by a team credits every named "
-                       "PI, so PI counts can overlap; spelling variants are "
-                       "grouped into people the same way as the search filter.")
+            if _all_time:
+                _top_bar(_by_pi, p1, "Largest float deployers of all time")
+                _top_bar(_by_proj, p2, "Largest programs of all time")
+                st.caption("Every float ever indexed at the GDAC since 1997, "
+                           "active or not, split by float type. A float run "
+                           "by a team credits every named PI, so PI counts "
+                           "can overlap; spelling variants are grouped into "
+                           "people the same way as the search filter.")
+            else:
+                _top_bar(_by_pi, p1, "Most active principal investigators")
+                _top_bar(_by_proj, p2, "Biggest programs right now")
+                st.caption(f"Floats reporting within {ACTIVE_DAYS} days, "
+                           "split by float type. A float run by a team "
+                           "credits every named PI, so PI counts can overlap; "
+                           "spelling variants are grouped into people the "
+                           "same way as the search filter.")
     st.stop()
 
 
